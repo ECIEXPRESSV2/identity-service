@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { AuditAction, StoreStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ClosureSchedulerService } from './closure-scheduler.service';
 import type { CreateStoreDto } from './dto/create-store.dto';
 import type { UpdateStoreDto } from './dto/update-store.dto';
 import type { UpdateStoreStatusDto } from './dto/update-store-status.dto';
@@ -14,7 +16,10 @@ import type { CreateClosureDto } from './dto/create-closure.dto';
 
 @Injectable()
 export class StoresService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly scheduler: ClosureSchedulerService,
+  ) {}
 
   async createStore(ownerId: string, dto: CreateStoreDto, correlationId: string) {
     const store = await this.prisma.$transaction(async (tx) => {
@@ -203,16 +208,69 @@ export class StoresService {
   }
 
   async createClosure(
-    _storeId: string,
-    _dto: CreateClosureDto,
-    _actorId: string,
+    storeId: string,
+    dto: CreateClosureDto,
+    actorId: string,
     _correlationId: string,
   ) {
-    throw new Error('Not implemented — see TASK-08');
+    await this.loadStore(storeId);
+
+    if (dto.startDate <= new Date()) {
+      throw new BadRequestException('startDate debe ser una fecha futura');
+    }
+    if (dto.endDate <= dto.startDate) {
+      throw new BadRequestException('endDate debe ser posterior a startDate');
+    }
+
+    const overlap = await this.prisma.storeClosure.findFirst({
+      where: {
+        storeId,
+        AND: [
+          { startDate: { lt: dto.endDate } },
+          { endDate:   { gt: dto.startDate } },
+        ],
+      },
+    });
+    if (overlap) {
+      throw new ConflictException('Ya existe un cierre que se solapa con el rango indicado');
+    }
+
+    const closure = await this.prisma.$transaction(async (tx) => {
+      const c = await tx.storeClosure.create({
+        data: {
+          storeId,
+          startDate: dto.startDate,
+          endDate:   dto.endDate,
+          reason:    dto.reason ?? null,
+          createdBy: actorId,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetId:   c.id,
+          targetType: 'StoreClosure',
+          action:     AuditAction.STORE_CLOSURE_CREATED,
+          newValue:   { storeId, startDate: dto.startDate, endDate: dto.endDate } as never,
+        },
+      });
+
+      return c;
+    });
+
+    await this.scheduler.scheduleClose(storeId, closure.startDate, closure.id);
+    await this.scheduler.scheduleReopen(storeId, closure.endDate, closure.id);
+
+    return closure;
   }
 
-  async listClosures(_storeId: string) {
-    throw new Error('Not implemented — see TASK-08');
+  async listClosures(storeId: string) {
+    await this.loadStore(storeId);
+    return this.prisma.storeClosure.findMany({
+      where: { storeId, endDate: { gt: new Date() } },
+      orderBy: { startDate: 'asc' },
+    });
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
