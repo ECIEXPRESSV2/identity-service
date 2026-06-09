@@ -1,0 +1,210 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgres"
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum SystemRole {
+  BUYER
+  SELLER
+  ADMIN
+  ANALYST
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum StoreStatus {
+  OPEN
+  CLOSED
+  TEMPORARILY_CLOSED
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+enum AuditAction {
+  USER_CREATED
+  USER_UPDATED
+  USER_DEACTIVATED
+  ROLE_ASSIGNED
+  ROLE_REVOKED
+  STORE_CREATED
+  STORE_UPDATED
+  STORE_CLOSURE_CREATED
+  PERMISSION_GRANTED
+  PERMISSION_REVOKED
+}
+
+// ─── Identity Domain ──────────────────────────────────────────────────────────
+
+model User {
+  id          String     @id @default(uuid())
+  firebaseUid String     @unique
+  email       String     @unique
+  fullName    String
+  phone       String?
+  avatarUrl   String?
+  status      UserStatus @default(ACTIVE)
+  lastLoginAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  userRoles  UserRole[]
+  stores     Store[]
+  auditLogs  AuditLog[]  @relation("ActorLogs")
+  closures   StoreClosure[] @relation("ClosureCreator")
+
+  @@map("users")
+}
+
+model Role {
+  id          String      @id @default(uuid())
+  name        String      @unique
+  systemRole  SystemRole?
+  isSystem    Boolean     @default(false)
+  description String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  resource    String
+  action      String
+  description String?
+  createdAt   DateTime @default(now())
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+model UserRole {
+  id         String    @id @default(uuid())
+  userId     String
+  roleId     String
+  assignedAt DateTime  @default(now())
+  assignedBy String?
+  expiresAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@map("user_roles")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid())
+  roleId       String
+  permissionId String
+  grantedAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@map("role_permissions")
+}
+
+// ─── Administration Domain ────────────────────────────────────────────────────
+
+model Store {
+  id          String      @id @default(uuid())
+  ownerId     String
+  name        String
+  description String?
+  location    String
+  imageUrl    String?
+  status      StoreStatus @default(OPEN)
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  owner     User           @relation(fields: [ownerId], references: [id])
+  schedules StoreSchedule[]
+  closures  StoreClosure[]
+
+  @@map("stores")
+}
+
+model StoreSchedule {
+  id        String   @id @default(uuid())
+  storeId   String
+  dayOfWeek Int
+  openTime  String
+  closeTime String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id])
+
+  @@unique([storeId, dayOfWeek])
+  @@map("store_schedules")
+}
+
+model StoreClosure {
+  id        String   @id @default(uuid())
+  storeId   String
+  startDate DateTime
+  endDate   DateTime
+  reason    String?  @db.VarChar(200)
+  createdBy String
+  createdAt DateTime @default(now())
+
+  store   Store @relation(fields: [storeId], references: [id])
+  creator User  @relation("ClosureCreator", fields: [createdBy], references: [id])
+
+  @@map("store_closures")
+}
+
+// ─── Transversal ──────────────────────────────────────────────────────────────
+
+model OutboxEvent {
+  id            String       @id @default(uuid())
+  aggregateId   String
+  aggregateType String
+  eventType     String
+  eventVersion  Int          @default(1)
+  payload       Json
+  status        OutboxStatus @default(PENDING)
+  retryCount    Int          @default(0)
+  lastError     String?
+  createdAt     DateTime     @default(now())
+  publishedAt   DateTime?
+
+  @@map("outbox_events")
+}
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  actorId    String?
+  targetId   String
+  targetType String
+  action     AuditAction
+  oldValue   Json?
+  newValue   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+
+  actor User? @relation("ActorLogs", fields: [actorId], references: [id])
+
+  @@map("audit_logs")
+}
