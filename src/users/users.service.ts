@@ -181,12 +181,15 @@ export class UsersService {
         include: { userRoles: { include: { role: true } } },
       });
 
+      const auditAction =
+        status === UserStatus.ACTIVE ? AuditAction.USER_UPDATED : AuditAction.USER_DEACTIVATED;
+
       await tx.auditLog.create({
         data: {
           actorId,
           targetId,
           targetType: 'User',
-          action: AuditAction.USER_DEACTIVATED,
+          action: auditAction,
           oldValue: { status: user.status },
           newValue: { status },
         },

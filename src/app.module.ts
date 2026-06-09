@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { PrismaModule } from './prisma/prisma.module';
+import { CommonModule } from './common/common.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { RolesModule } from './roles/roles.module';
@@ -14,6 +15,7 @@ import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
 @Module({
   imports: [
     PrismaModule,
+    CommonModule,
     AuthModule,
     UsersModule,
     RolesModule,

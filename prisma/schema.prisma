@@ -119,6 +119,7 @@ model RolePermission {
   role       Role       @relation(fields: [roleId], references: [id])
   permission Permission @relation(fields: [permissionId], references: [id])
 
+  @@unique([roleId, permissionId])
   @@map("role_permissions")
 }
 
@@ -186,6 +187,7 @@ model OutboxEvent {
   status        OutboxStatus @default(PENDING)
   retryCount    Int          @default(0)
   lastError     String?
+  nextRetryAt   DateTime?
   createdAt     DateTime     @default(now())
   publishedAt   DateTime?
 
