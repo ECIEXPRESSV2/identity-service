@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Put } from '@nestjs/common';
 import { StoresService } from './stores.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
@@ -6,6 +6,7 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { CreateStoreSchema, type CreateStoreDto } from './dto/create-store.dto';
 import { UpdateStoreSchema, type UpdateStoreDto } from './dto/update-store.dto';
+import { UpdateStoreStatusSchema, type UpdateStoreStatusDto } from './dto/update-store-status.dto';
 import { CreateScheduleSchema, type CreateScheduleDto } from './dto/create-schedule.dto';
 import { CreateClosureSchema, type CreateClosureDto } from './dto/create-closure.dto';
 import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
@@ -42,7 +43,28 @@ export class StoresController {
     @Body(new ZodValidationPipe(UpdateStoreSchema)) dto: UpdateStoreDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.storesService.updateStore(id, dto, user.userId, user.correlationId);
+    return this.storesService.updateStore(
+      id,
+      dto,
+      user.userId,
+      user.roles.includes('ADMIN'),
+    );
+  }
+
+  @Patch(':id/status')
+  @RequirePermission('store:write')
+  patchStatus(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(UpdateStoreStatusSchema)) dto: UpdateStoreStatusDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.storesService.updateStatus(
+      id,
+      dto,
+      user.userId,
+      user.roles.includes('ADMIN'),
+      user.correlationId,
+    );
   }
 
   @Post(':id/schedules')
@@ -52,7 +74,12 @@ export class StoresController {
     @Body(new ZodValidationPipe(CreateScheduleSchema)) dto: CreateScheduleDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.storesService.upsertSchedule(storeId, dto, user.userId);
+    return this.storesService.upsertSchedule(
+      storeId,
+      dto,
+      user.userId,
+      user.roles.includes('ADMIN'),
+    );
   }
 
   @Get(':id/schedules')

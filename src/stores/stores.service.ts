@@ -1,44 +1,268 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { AuditAction, StoreStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateStoreDto } from './dto/create-store.dto';
 import type { UpdateStoreDto } from './dto/update-store.dto';
+import type { UpdateStoreStatusDto } from './dto/update-store-status.dto';
 import type { CreateScheduleDto } from './dto/create-schedule.dto';
 import type { CreateClosureDto } from './dto/create-closure.dto';
-
 
 @Injectable()
 export class StoresService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async createStore(_ownerId: string, _dto: CreateStoreDto, _correlationId: string) {
-    throw new Error('Not implemented — see TASK-07');
+  async createStore(ownerId: string, dto: CreateStoreDto, correlationId: string) {
+    const store = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.store.create({
+        data: { ownerId, ...dto, status: StoreStatus.OPEN, isActive: true },
+      });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:   created.id,
+          aggregateType: 'Store',
+          eventType:     'StoreCreated',
+          eventVersion:  1,
+          payload: {
+            eventType:    'StoreCreated',
+            eventVersion: 1,
+            correlationId,
+            occurredAt:   new Date().toISOString(),
+            payload: {
+              storeId:  created.id,
+              ownerId,
+              name:     created.name,
+              location: created.location,
+              status:   'OPEN',
+            },
+          },
+          status:     'PENDING',
+          retryCount: 0,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId:    ownerId,
+          targetId:   created.id,
+          targetType: 'Store',
+          action:     AuditAction.STORE_CREATED,
+          newValue:   { name: created.name, location: created.location } as never,
+        },
+      });
+
+      return created;
+    });
+
+    return this.formatStore(store);
   }
 
   async listStores() {
-    return this.prisma.store.findMany({ where: { isActive: true } });
+    const stores = await this.prisma.store.findMany({
+      where: { isActive: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    return stores.map(this.formatStore);
   }
 
-  async findById(_id: string) {
-    throw new Error('Not implemented — see TASK-07');
+  async findById(id: string) {
+    const store = await this.prisma.store.findUnique({
+      where: { id },
+      include: { schedules: { orderBy: { dayOfWeek: 'asc' } } },
+    });
+    if (!store) throw new NotFoundException('Tienda no encontrada');
+    return { ...this.formatStore(store), schedules: store.schedules };
   }
 
-  async updateStore(_id: string, _dto: UpdateStoreDto, _actorId: string, _correlationId: string) {
-    throw new Error('Not implemented — see TASK-07');
+  async updateStore(
+    id: string,
+    dto: UpdateStoreDto,
+    actorId: string,
+    isAdmin: boolean,
+  ) {
+    const store = await this.loadStore(id);
+    this.assertOwnership(store.ownerId, actorId, isAdmin);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.store.update({ where: { id }, data: dto });
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetId:   id,
+          targetType: 'Store',
+          action:     AuditAction.STORE_UPDATED,
+          oldValue:   this.pickChangedOld(store, dto) as never,
+          newValue:   dto as never,
+        },
+      });
+
+      return u;
+    });
+
+    return this.formatStore(updated);
   }
 
-  async upsertSchedule(_storeId: string, _dto: CreateScheduleDto, _actorId: string) {
-    throw new Error('Not implemented — see TASK-07');
+  async updateStatus(
+    id: string,
+    dto: UpdateStoreStatusDto,
+    actorId: string,
+    isAdmin: boolean,
+    correlationId: string,
+  ) {
+    const store = await this.loadStore(id);
+    this.assertOwnership(store.ownerId, actorId, isAdmin);
+
+    if (store.status === dto.status) {
+      return this.formatStore(store);
+    }
+
+    const newStatus = dto.status as StoreStatus;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.store.update({
+        where: { id },
+        data: { status: newStatus },
+      });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:   id,
+          aggregateType: 'Store',
+          eventType:     'StoreStatusChanged',
+          eventVersion:  1,
+          payload: {
+            eventType:    'StoreStatusChanged',
+            eventVersion: 1,
+            correlationId,
+            occurredAt:   new Date().toISOString(),
+            payload: {
+              storeId:        id,
+              previousStatus: store.status,
+              newStatus,
+              reason:         dto.reason ?? null,
+            },
+          },
+          status:     'PENDING',
+          retryCount: 0,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetId:   id,
+          targetType: 'Store',
+          action:     AuditAction.STORE_UPDATED,
+          oldValue:   { status: store.status } as never,
+          newValue:   { status: newStatus } as never,
+        },
+      });
+
+      return u;
+    });
+
+    return this.formatStore(updated);
   }
 
-  async getSchedules(_storeId: string) {
-    throw new Error('Not implemented — see TASK-07');
+  async upsertSchedule(
+    storeId: string,
+    dto: CreateScheduleDto,
+    actorId: string,
+    isAdmin: boolean,
+  ) {
+    const store = await this.loadStore(storeId);
+    this.assertOwnership(store.ownerId, actorId, isAdmin);
+
+    if (dto.openTime >= dto.closeTime) {
+      throw new BadRequestException('openTime debe ser anterior a closeTime');
+    }
+
+    return this.prisma.storeSchedule.upsert({
+      where: { storeId_dayOfWeek: { storeId, dayOfWeek: dto.dayOfWeek } },
+      update: {
+        openTime:  dto.openTime,
+        closeTime: dto.closeTime,
+        isActive:  dto.isActive,
+      },
+      create: { storeId, ...dto },
+    });
   }
 
-  async createClosure(_storeId: string, _dto: CreateClosureDto, _actorId: string, _correlationId: string) {
+  async getSchedules(storeId: string) {
+    await this.loadStore(storeId);
+    return this.prisma.storeSchedule.findMany({
+      where: { storeId },
+      orderBy: { dayOfWeek: 'asc' },
+    });
+  }
+
+  async createClosure(
+    _storeId: string,
+    _dto: CreateClosureDto,
+    _actorId: string,
+    _correlationId: string,
+  ) {
     throw new Error('Not implemented — see TASK-08');
   }
 
   async listClosures(_storeId: string) {
     throw new Error('Not implemented — see TASK-08');
+  }
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
+
+  private async loadStore(id: string) {
+    const store = await this.prisma.store.findUnique({ where: { id } });
+    if (!store) throw new NotFoundException('Tienda no encontrada');
+    return store;
+  }
+
+  private assertOwnership(ownerId: string, actorId: string, isAdmin: boolean): void {
+    if (!isAdmin && ownerId !== actorId) {
+      throw new ForbiddenException('Solo el dueño de la tienda o un administrador puede realizar esta acción');
+    }
+  }
+
+  private pickChangedOld(
+    store: Record<string, unknown>,
+    dto: UpdateStoreDto,
+  ): Record<string, unknown> {
+    return Object.fromEntries(
+      Object.keys(dto)
+        .filter((k) => dto[k as keyof UpdateStoreDto] !== undefined)
+        .map((k) => [k, store[k]]),
+    );
+  }
+
+  private formatStore(store: {
+    id: string;
+    ownerId: string;
+    name: string;
+    description?: string | null;
+    location: string;
+    imageUrl?: string | null;
+    status: StoreStatus;
+    isActive: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
+    return {
+      id:          store.id,
+      ownerId:     store.ownerId,
+      name:        store.name,
+      description: store.description ?? null,
+      location:    store.location,
+      imageUrl:    store.imageUrl ?? null,
+      status:      store.status,
+      isActive:    store.isActive,
+      createdAt:   store.createdAt,
+      updatedAt:   store.updatedAt,
+    };
   }
 }
