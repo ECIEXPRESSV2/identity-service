@@ -10,7 +10,7 @@ datasource db {
 
 enum SystemRole {
   BUYER
-  SELLER
+  VENDOR
   ADMIN
   ANALYST
 }
@@ -21,10 +21,23 @@ enum UserStatus {
   SUSPENDED
 }
 
+enum StoreType {
+  CAFETERIA
+  PAPELERIA
+  RESTAURANTE
+}
+
 enum StoreStatus {
   OPEN
   CLOSED
   TEMPORARILY_CLOSED
+}
+
+enum ClosureStatus {
+  SCHEDULED
+  ACTIVE
+  EXPIRED
+  CANCELLED
 }
 
 enum OutboxStatus {
@@ -42,6 +55,9 @@ enum AuditAction {
   STORE_CREATED
   STORE_UPDATED
   STORE_CLOSURE_CREATED
+  STORE_CLOSURE_CANCELLED
+  STORE_STAFF_ASSIGNED
+  STORE_STAFF_REMOVED
   PERMISSION_GRANTED
   PERMISSION_REVOKED
 }
@@ -49,21 +65,23 @@ enum AuditAction {
 // ─── Identity Domain ──────────────────────────────────────────────────────────
 
 model User {
-  id          String     @id @default(uuid())
-  firebaseUid String     @unique
-  email       String     @unique
-  fullName    String
-  phone       String?
-  avatarUrl   String?
-  status      UserStatus @default(ACTIVE)
-  lastLoginAt DateTime?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id            String     @id @default(uuid())
+  firebaseUid   String     @unique
+  email         String     @unique
+  fullName      String
+  phone         String?
+  avatarUrl     String?
+  status        UserStatus @default(ACTIVE)
+  emailVerified Boolean    @default(false)
+  lastLoginAt   DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
-  userRoles  UserRole[]
-  stores     Store[]
-  auditLogs  AuditLog[]  @relation("ActorLogs")
-  closures   StoreClosure[] @relation("ClosureCreator")
+  userRoles    UserRole[]
+  ownedStores  Store[]        @relation("StoreOwner")
+  auditLogs    AuditLog[]     @relation("ActorLogs")
+  closures     StoreClosure[] @relation("ClosureCreator")
+  staffEntries StoreStaff[]   @relation("StaffMember")
 
   @@map("users")
 }
@@ -128,7 +146,8 @@ model RolePermission {
 model Store {
   id          String      @id @default(uuid())
   ownerId     String
-  name        String
+  name        String      @unique
+  type        StoreType
   description String?
   location    String
   imageUrl    String?
@@ -137,11 +156,29 @@ model Store {
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
-  owner     User           @relation(fields: [ownerId], references: [id])
+  owner     User            @relation("StoreOwner", fields: [ownerId], references: [id])
   schedules StoreSchedule[]
   closures  StoreClosure[]
+  staff     StoreStaff[]
 
   @@map("stores")
+}
+
+model StoreStaff {
+  id         String    @id @default(uuid())
+  storeId    String
+  userId     String
+  assignedBy String?
+  assignedAt DateTime  @default(now())
+  isActive   Boolean   @default(true)
+  removedBy  String?
+  removedAt  DateTime?
+
+  store Store @relation(fields: [storeId], references: [id])
+  user  User  @relation("StaffMember", fields: [userId], references: [id])
+
+  @@unique([storeId, userId])
+  @@map("store_staff")
 }
 
 model StoreSchedule {
@@ -161,13 +198,18 @@ model StoreSchedule {
 }
 
 model StoreClosure {
-  id        String   @id @default(uuid())
-  storeId   String
-  startDate DateTime
-  endDate   DateTime
-  reason    String?  @db.VarChar(200)
-  createdBy String
-  createdAt DateTime @default(now())
+  id          String        @id @default(uuid())
+  storeId     String
+  startDate   DateTime
+  endDate     DateTime
+  reason      String?       @db.VarChar(200)
+  status      ClosureStatus @default(SCHEDULED)
+  createdBy   String
+  cancelledBy String?
+  cancelledAt DateTime?
+  processedAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
   store   Store @relation(fields: [storeId], references: [id])
   creator User  @relation("ClosureCreator", fields: [createdBy], references: [id])
@@ -178,18 +220,19 @@ model StoreClosure {
 // ─── Transversal ──────────────────────────────────────────────────────────────
 
 model OutboxEvent {
-  id            String       @id @default(uuid())
-  aggregateId   String
-  aggregateType String
-  eventType     String
-  eventVersion  Int          @default(1)
-  payload       Json
-  status        OutboxStatus @default(PENDING)
-  retryCount    Int          @default(0)
-  lastError     String?
-  nextRetryAt   DateTime?
-  createdAt     DateTime     @default(now())
-  publishedAt   DateTime?
+  id             String       @id @default(uuid())
+  aggregateId    String
+  aggregateType  String
+  eventType      String
+  eventVersion   Int          @default(1)
+  payload        Json
+  status         OutboxStatus @default(PENDING)
+  retryCount     Int          @default(0)
+  lastError      String?
+  nextRetryAt    DateTime?
+  idempotencyKey String       @unique
+  createdAt      DateTime     @default(now())
+  publishedAt    DateTime?
 
   @@map("outbox_events")
 }

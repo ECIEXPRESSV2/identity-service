@@ -104,10 +104,11 @@ export class ClosureSchedulerService implements OnApplicationBootstrap, OnApplic
 
       await tx.outboxEvent.create({
         data: {
-          aggregateId:   storeId,
-          aggregateType: 'Store',
-          eventType:     'StoreStatusChanged',
-          eventVersion:  1,
+          aggregateId:    storeId,
+          aggregateType:  'Store',
+          eventType:      'StoreStatusChanged',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
           payload: {
             eventType:    'StoreStatusChanged',
             eventVersion: 1,

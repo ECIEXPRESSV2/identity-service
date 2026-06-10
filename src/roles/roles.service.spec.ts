@@ -21,7 +21,7 @@ const USER_ID  = 'user-uuid';
 const ROLE_ID  = 'role-uuid';
 
 const fakeUser = { id: USER_ID, email: 'u@eci.edu.co' };
-const fakeRole = { id: ROLE_ID, name: 'SELLER' };
+const fakeRole = { id: ROLE_ID, name: 'VENDOR' };
 const fakeAssignment = { id: 'assignment-uuid', userId: USER_ID, roleId: ROLE_ID };
 
 describe('RolesService', () => {
@@ -31,7 +31,7 @@ describe('RolesService', () => {
       fn(mockPrisma),
     );
     mockPrisma.userRole.findMany.mockResolvedValue([
-      { role: { id: ROLE_ID, name: 'SELLER' } },
+      { role: { id: ROLE_ID, name: 'VENDOR' } },
     ]);
   });
 

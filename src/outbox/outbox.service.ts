@@ -1,12 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import type { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 
 @Injectable()
 export class OutboxService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Write an outbox event inside an existing transaction. */
+  /** Build an OutboxEvent create payload with a generated idempotency key. */
   buildCreateEvent(
     aggregateId: string,
     aggregateType: string,
@@ -21,6 +22,7 @@ export class OutboxService {
       payload: payload as Prisma.InputJsonValue,
       status: 'PENDING',
       retryCount: 0,
+      idempotencyKey: randomUUID(),
     };
   }
 }

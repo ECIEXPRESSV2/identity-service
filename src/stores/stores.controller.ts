@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -12,11 +12,14 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import { StoreType } from '@prisma/client';
 import { CreateStoreSchema, type CreateStoreDto } from './dto/create-store.dto';
 import { UpdateStoreSchema, type UpdateStoreDto } from './dto/update-store.dto';
 import { UpdateStoreStatusSchema, type UpdateStoreStatusDto } from './dto/update-store-status.dto';
 import { CreateScheduleSchema, type CreateScheduleDto } from './dto/create-schedule.dto';
+import { UpdateScheduleSchema, type UpdateScheduleDto } from './dto/update-schedule.dto';
 import { CreateClosureSchema, type CreateClosureDto } from './dto/create-closure.dto';
+import { AssignStaffSchema, type AssignStaffDto } from './dto/assign-staff.dto';
 import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
 
 const STORE_SCHEMA = {
@@ -103,9 +106,10 @@ export class StoresController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['name', 'location'],
+      required: ['name', 'type', 'location'],
       properties: {
         name:        { type: 'string', minLength: 2, maxLength: 100, example: 'Cafetería Bloque A' },
+        type:        { type: 'string', enum: ['CAFETERIA', 'PAPELERIA', 'RESTAURANTE'], example: 'CAFETERIA' },
         description: { type: 'string', maxLength: 500, example: 'Cafetería principal del campus' },
         location:    { type: 'string', minLength: 2, maxLength: 200, example: 'Bloque A, piso 1' },
         imageUrl:    { type: 'string', format: 'uri', example: 'https://storage.googleapis.com/img.jpg' },
@@ -383,5 +387,167 @@ export class StoresController {
   @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
   listClosures(@Param('id') storeId: string) {
     return this.storesService.listClosures(storeId);
+  }
+
+  @Delete(':id/closures/:closureId')
+  @RequirePermission('store:close')
+  @ApiOperation({
+    summary: 'Cancelar cierre temporal',
+    description: 'Cancela un cierre programado o activo. Requiere permiso `store:close`.',
+  })
+  @ApiParam({ name: 'id',        description: 'UUID de la tienda',  format: 'uuid' })
+  @ApiParam({ name: 'closureId', description: 'UUID del cierre',    format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Cierre cancelado' })
+  @ApiResponse({ status: 400, description: 'El cierre ya expiró o fue cancelado' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `store:close` requerido' })
+  @ApiResponse({ status: 404, description: 'Tienda o cierre no encontrado' })
+  cancelClosure(
+    @Param('id')        storeId:   string,
+    @Param('closureId') closureId: string,
+    @CurrentUser()      user:      AuthenticatedUser,
+  ) {
+    return this.storesService.cancelClosure(storeId, closureId, user.userId);
+  }
+
+  // ── Schedules CRUD ────────────────────────────────────────────────────────────
+
+  @Patch(':id/schedules/:scheduleId')
+  @RequirePermission('store:write')
+  @ApiOperation({
+    summary: 'Actualizar horario de atención',
+    description: 'Actualiza un horario existente. Requiere permiso `store:write`.',
+  })
+  @ApiParam({ name: 'id',         description: 'UUID de la tienda',  format: 'uuid' })
+  @ApiParam({ name: 'scheduleId', description: 'UUID del horario',   format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        openTime:  { type: 'string', example: '08:00' },
+        closeTime: { type: 'string', example: '18:00' },
+        isActive:  { type: 'boolean' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Horario actualizado', schema: SCHEDULE_SCHEMA })
+  @ApiResponse({ status: 400, description: 'openTime >= closeTime o ningún campo enviado' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Solo el dueño o un ADMIN puede modificar horarios' })
+  @ApiResponse({ status: 404, description: 'Tienda o horario no encontrado' })
+  updateSchedule(
+    @Param('id')         storeId:    string,
+    @Param('scheduleId') scheduleId: string,
+    @Body(new ZodValidationPipe(UpdateScheduleSchema)) dto: UpdateScheduleDto,
+    @CurrentUser()       user: AuthenticatedUser,
+  ) {
+    return this.storesService.updateSchedule(storeId, scheduleId, dto, user.userId, user.roles.includes('ADMIN'));
+  }
+
+  @Delete(':id/schedules/:scheduleId')
+  @RequirePermission('store:write')
+  @ApiOperation({
+    summary: 'Eliminar horario de atención',
+    description: 'Elimina un horario de la tienda. Requiere permiso `store:write`.',
+  })
+  @ApiParam({ name: 'id',         description: 'UUID de la tienda', format: 'uuid' })
+  @ApiParam({ name: 'scheduleId', description: 'UUID del horario',  format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Horario eliminado' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Solo el dueño o un ADMIN puede eliminar horarios' })
+  @ApiResponse({ status: 404, description: 'Tienda o horario no encontrado' })
+  deleteSchedule(
+    @Param('id')         storeId:    string,
+    @Param('scheduleId') scheduleId: string,
+    @CurrentUser()       user: AuthenticatedUser,
+  ) {
+    return this.storesService.deleteSchedule(storeId, scheduleId, user.userId, user.roles.includes('ADMIN'));
+  }
+
+  // ── Staff ─────────────────────────────────────────────────────────────────────
+
+  @Post(':id/staff')
+  @RequirePermission('store:staff')
+  @ApiOperation({
+    summary: 'Asignar vendedor a la tienda',
+    description: 'Asigna un usuario con rol VENDOR o ADMIN a la tienda. Requiere permiso `store:staff`.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['userId'],
+      properties: { userId: { type: 'string', format: 'uuid', description: 'UUID del usuario a asignar' } },
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Vendedor asignado' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `store:staff` requerido' })
+  @ApiResponse({ status: 404, description: 'Tienda o usuario no encontrado' })
+  @ApiResponse({ status: 409, description: 'El usuario ya está asignado' })
+  @ApiResponse({ status: 422, description: 'El usuario no tiene rol VENDOR o ADMIN' })
+  assignStaff(
+    @Param('id')   storeId: string,
+    @Body(new ZodValidationPipe(AssignStaffSchema)) dto: AssignStaffDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.storesService.assignStaff(storeId, dto, user.userId);
+  }
+
+  @Delete(':id/staff/:userId')
+  @RequirePermission('store:staff')
+  @ApiOperation({
+    summary: 'Remover vendedor de la tienda',
+    description: 'Desactiva la asignación del vendedor. Requiere permiso `store:staff`.',
+  })
+  @ApiParam({ name: 'id',     description: 'UUID de la tienda',   format: 'uuid' })
+  @ApiParam({ name: 'userId', description: 'UUID del vendedor',   format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Vendedor removido' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `store:staff` requerido' })
+  @ApiResponse({ status: 404, description: 'Tienda o asignación no encontrada' })
+  removeStaff(
+    @Param('id')     storeId:     string,
+    @Param('userId') staffUserId: string,
+    @CurrentUser()   user: AuthenticatedUser,
+  ) {
+    return this.storesService.removeStaff(storeId, staffUserId, user.userId);
+  }
+
+  // ── Public / Buyer endpoints ──────────────────────────────────────────────────
+
+  @Get('available')
+  @Public()
+  @ApiOperation({
+    summary: 'Listar tiendas disponibles',
+    description: 'Lista todas las tiendas activas. Filtrable por `type`. Ruta pública.',
+  })
+  @ApiResponse({ status: 200, description: 'Tiendas disponibles', schema: { type: 'array', items: STORE_SCHEMA } })
+  listAvailable(@Query('type') type?: string) {
+    return this.storesService.listAvailable(type as StoreType | undefined);
+  }
+
+  @Get('my')
+  @ApiOperation({
+    summary: 'Mis tiendas (vendedor)',
+    description: 'Retorna las tiendas donde el usuario autenticado es dueño o staff activo.',
+  })
+  @ApiResponse({ status: 200, description: 'Tiendas del vendedor', schema: { type: 'array', items: STORE_SCHEMA } })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  getMyStores(@CurrentUser() user: AuthenticatedUser) {
+    return this.storesService.getMyStores(user.userId);
+  }
+
+  @Get(':id/public')
+  @Public()
+  @ApiOperation({
+    summary: 'Detalle público de tienda',
+    description: 'Retorna el detalle de una tienda activa con sus horarios. Ruta pública.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Detalle de la tienda', schema: STORE_SCHEMA })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada o inactiva' })
+  getPublicDetail(@Param('id') storeId: string) {
+    return this.storesService.getPublicDetail(storeId);
   }
 }

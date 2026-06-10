@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -31,7 +31,7 @@ const ROLE_ASSIGNMENT_SCHEMA = {
   },
   example: {
     userId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-    roles:  [{ id: 'rol-uuid', name: 'SELLER' }],
+    roles:  [{ id: 'rol-uuid', name: 'VENDOR' }],
   },
 };
 
@@ -40,6 +40,98 @@ const ROLE_ASSIGNMENT_SCHEMA = {
 @Controller()
 export class RolesController {
   constructor(private readonly rolesService: RolesService) {}
+
+  @Post('roles')
+  @RequirePermission('role:write')
+  @ApiOperation({
+    summary: 'Crear rol personalizado',
+    description: 'Crea un nuevo rol no-sistema. Requiere permiso `role:write`.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name:        { type: 'string', minLength: 2, maxLength: 50, example: 'SUPERVISOR' },
+        description: { type: 'string', maxLength: 200, example: 'Supervisor de tienda' },
+      },
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Rol creado' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `role:write` requerido' })
+  @ApiResponse({ status: 409, description: 'Ya existe un rol con ese nombre' })
+  createRole(
+    @Body('name')        name: string,
+    @Body('description') description?: string,
+    @CurrentUser()       actor?: AuthenticatedUser,
+  ) {
+    return this.rolesService.createRole(name, description, actor?.userId);
+  }
+
+  @Get('permissions')
+  @RequirePermission('role:read')
+  @ApiOperation({
+    summary: 'Listar permisos disponibles',
+    description: 'Retorna los permisos del sistema. Filtrable por `resource`. Requiere permiso `role:read`.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de permisos',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id:          { type: 'string', format: 'uuid' },
+          resource:    { type: 'string', example: 'store' },
+          action:      { type: 'string', example: 'write' },
+          description: { type: 'string', nullable: true },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `role:read` requerido' })
+  listPermissions(@Query('resource') resource?: string) {
+    return this.rolesService.listPermissions(resource);
+  }
+
+  @Put('roles/:roleId/permissions')
+  @RequirePermission('role:write')
+  @ApiOperation({
+    summary: 'Reemplazar permisos de un rol',
+    description:
+      'Reemplaza completamente la lista de permisos del rol. Es idempotente. ' +
+      'No aplica a roles de sistema. Requiere permiso `role:write`.',
+  })
+  @ApiParam({ name: 'roleId', description: 'UUID del rol', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['permissionIds'],
+      properties: {
+        permissionIds: {
+          type: 'array',
+          items: { type: 'string', format: 'uuid' },
+          example: ['perm-uuid-1', 'perm-uuid-2'],
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Permisos actualizados' })
+  @ApiResponse({ status: 400, description: 'Uno o más permissionIds no existen' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `role:write` requerido' })
+  @ApiResponse({ status: 404, description: 'Rol no encontrado' })
+  @ApiResponse({ status: 422, description: 'El rol es de sistema y no puede modificarse' })
+  setRolePermissions(
+    @Param('roleId')         roleId: string,
+    @Body('permissionIds')   permissionIds: string[],
+    @CurrentUser()           actor: AuthenticatedUser,
+  ) {
+    return this.rolesService.setRolePermissions(roleId, permissionIds ?? [], actor.userId);
+  }
 
   @Get('roles')
   @RequirePermission('role:read')
@@ -63,7 +155,7 @@ export class RolesController {
       },
       example: [
         { id: 'uuid-1', name: 'BUYER',    description: 'Comprador',     isSystem: true },
-        { id: 'uuid-2', name: 'SELLER',   description: 'Vendedor',      isSystem: true },
+        { id: 'uuid-2', name: 'VENDOR',   description: 'Vendedor',      isSystem: true },
         { id: 'uuid-3', name: 'ADMIN',    description: 'Administrador', isSystem: true },
         { id: 'uuid-4', name: 'ANALYST',  description: 'Analista',      isSystem: true },
       ],

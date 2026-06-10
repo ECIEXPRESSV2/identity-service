@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -83,6 +83,47 @@ export class UsersController {
       user.email,
       dto,
       user.correlationId,
+    );
+  }
+
+  @Get('users')
+  @RequirePermission('user:read')
+  @ApiOperation({
+    summary: 'Listar usuarios',
+    description: 'Lista paginada de usuarios con filtros opcionales. Requiere permiso `user:read`.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista paginada de usuarios',
+    schema: {
+      type: 'object',
+      properties: {
+        data:  { type: 'array', items: USER_SCHEMA },
+        meta: {
+          type: 'object',
+          properties: {
+            total:      { type: 'number' },
+            page:       { type: 'number' },
+            limit:      { type: 'number' },
+            totalPages: { type: 'number' },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `user:read` requerido' })
+  listUsers(
+    @Query('page')   page   = '1',
+    @Query('limit')  limit  = '20',
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('role')   role?:   string,
+  ) {
+    return this.usersService.listUsers(
+      { search, status: status as UserStatus | undefined, role },
+      Math.max(1, Number.parseInt(page, 10) || 1),
+      Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 20)),
     );
   }
 

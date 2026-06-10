@@ -77,7 +77,7 @@ async function bootstrap() {
       `| Rol | Descripción |\n` +
       `|-----|-------------|\n` +
       `| BUYER | Comprador — rol por defecto al registrarse |\n` +
-      `| SELLER | Vendedor — dueño de puntos de venta |\n` +
+      `| VENDOR | Vendedor — operador de puntos de venta |\n` +
       `| ADMIN | Administrador — acceso total |\n` +
       `| ANALYST | Analista — solo lectura |\n\n` +
       `## Exportar especificación\n` +

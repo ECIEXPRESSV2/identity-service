@@ -167,15 +167,18 @@ describe('FirebaseAuthGuard', () => {
   });
 
   describe('usuario no encontrado en DB', () => {
-    it('lanza UnauthorizedException si el firebaseUid no tiene perfil', async () => {
-      mockVerifyIdToken.mockResolvedValue({ uid: 'uid-sin-perfil' });
+    it('permite el request con userId vacío para que sync-profile pueda crear el perfil', async () => {
+      mockVerifyIdToken.mockResolvedValue({ uid: 'uid-sin-perfil', email: 'nuevo@eci.edu.co' });
       prisma.user.findUnique.mockResolvedValue(null);
 
       const ctx = buildContext('Bearer valid-token');
+      const result = await guard.canActivate(ctx);
 
-      await expect(guard.canActivate(ctx)).rejects.toThrow(
-        UnauthorizedException,
-      );
+      expect(result).toBe(true);
+      const req = ctx.switchToHttp().getRequest();
+      expect(req.user.userId).toBe('');
+      expect(req.user.firebaseUid).toBe('uid-sin-perfil');
+      expect(req.user.roles).toEqual([]);
     });
   });
 });

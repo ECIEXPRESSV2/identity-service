@@ -48,7 +48,7 @@ describe('StoresService', () => {
 
   it('creates store, outbox event and audit log in one transaction', async () => {
     const service = makeService();
-    const dto = { name: 'Cafetería ECI', location: 'Bloque A' };
+    const dto = { name: 'Cafetería ECI', type: 'CAFETERIA' as const, location: 'Bloque A' };
     mockPrisma.store.create.mockResolvedValue(fakeStore);
     mockPrisma.outboxEvent.create.mockResolvedValue({});
     mockPrisma.auditLog.create.mockResolvedValue({});

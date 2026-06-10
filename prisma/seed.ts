@@ -5,32 +5,34 @@ import { PrismaClient } from '@prisma/client';
 const adapter = new PrismaPg({ connectionString: process.env['DATABASE_URL'] });
 const prisma = new PrismaClient({ adapter });
 
-// Qué permisos tiene cada rol del sistema.
-// ADMIN bypasea el guard, pero se le asignan todos para que /auth/validate
+// Permisos asignados a cada rol.
+// ADMIN bypasea el guard pero se le asignan todos para que /auth/validate
 // retorne el conjunto completo al API Gateway.
 const ROLE_PERMISSIONS: Record<string, string[]> = {
   ADMIN: [
-    'user:read', 'user:deactivate',
-    'role:read', 'role:assign', 'role:revoke',
-    'store:read', 'store:write', 'store:close',
+    'user:read', 'user:write',
+    'role:read', 'role:write', 'role:assign', 'role:revoke',
+    'store:read', 'store:write', 'store:close', 'store:staff',
+    'audit:read',
   ],
-  SELLER:  ['store:read', 'store:write'],
-  ANALYST: ['user:read', 'store:read'],
+  VENDOR:  ['store:read', 'store:write'],
+  ANALYST: ['user:read', 'store:read', 'audit:read'],
   BUYER:   [],
 };
 
 async function main() {
   // ─── Roles ──────────────────────────────────────────────────────────────────
-  const roleDefs = [
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const roleDefs: Array<{ name: string; systemRole: any; description: string }> = [
     { name: 'BUYER',   systemRole: 'BUYER',   description: 'Comprador — estudiante o personal ECI' },
-    { name: 'SELLER',  systemRole: 'SELLER',  description: 'Vendedor — dueño de punto de venta' },
+    { name: 'VENDOR',  systemRole: 'VENDOR',  description: 'Vendedor — operador de punto de venta' },
     { name: 'ADMIN',   systemRole: 'ADMIN',   description: 'Administrador de la plataforma' },
     { name: 'ANALYST', systemRole: 'ANALYST', description: 'Analista — acceso a reportes' },
-  ] as const;
+  ];
 
   for (const role of roleDefs) {
     await prisma.role.upsert({
-      where: { name: role.name },
+      where:  { name: role.name },
       update: {},
       create: { name: role.name, systemRole: role.systemRole, isSystem: true, description: role.description },
     });
@@ -38,19 +40,22 @@ async function main() {
 
   // ─── Permisos ────────────────────────────────────────────────────────────────
   const permDefs = [
-    { resource: 'user',  action: 'read',       description: 'Ver perfil de cualquier usuario' },
-    { resource: 'user',  action: 'deactivate', description: 'Activar/suspender/desactivar usuario' },
-    { resource: 'role',  action: 'read',       description: 'Listar roles' },
-    { resource: 'role',  action: 'assign',     description: 'Asignar rol a usuario' },
-    { resource: 'role',  action: 'revoke',     description: 'Revocar rol de usuario' },
-    { resource: 'store', action: 'read',       description: 'Ver detalle y cierres de store' },
-    { resource: 'store', action: 'write',      description: 'Crear y actualizar store' },
-    { resource: 'store', action: 'close',      description: 'Crear cierre temporal' },
+    { resource: 'user',  action: 'read',   description: 'Ver perfil de cualquier usuario' },
+    { resource: 'user',  action: 'write',  description: 'Activar/suspender/desactivar usuario' },
+    { resource: 'role',  action: 'read',   description: 'Listar roles y permisos' },
+    { resource: 'role',  action: 'write',  description: 'Crear roles y asignar permisos a roles' },
+    { resource: 'role',  action: 'assign', description: 'Asignar rol a usuario' },
+    { resource: 'role',  action: 'revoke', description: 'Revocar rol de usuario' },
+    { resource: 'store', action: 'read',   description: 'Ver detalle y cierres de store' },
+    { resource: 'store', action: 'write',  description: 'Crear y actualizar store' },
+    { resource: 'store', action: 'close',  description: 'Crear y cancelar cierres temporales' },
+    { resource: 'store', action: 'staff',  description: 'Asignar y remover vendedores de un store' },
+    { resource: 'audit', action: 'read',   description: 'Consultar log de auditoría' },
   ];
 
   for (const perm of permDefs) {
     await prisma.permission.upsert({
-      where: { resource_action: { resource: perm.resource, action: perm.action } },
+      where:  { resource_action: { resource: perm.resource, action: perm.action } },
       update: {},
       create: perm,
     });
@@ -74,7 +79,7 @@ async function main() {
       if (!permissionId) continue;
 
       await prisma.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId, permissionId } },
+        where:  { roleId_permissionId: { roleId, permissionId } },
         update: {},
         create: { roleId, permissionId },
       });

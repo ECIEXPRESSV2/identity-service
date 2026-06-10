@@ -4,15 +4,19 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
-import { AuditAction, StoreStatus } from '@prisma/client';
+import { AuditAction, ClosureStatus, StoreStatus, StoreType } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClosureSchedulerService } from './closure-scheduler.service';
 import type { CreateStoreDto } from './dto/create-store.dto';
 import type { UpdateStoreDto } from './dto/update-store.dto';
 import type { UpdateStoreStatusDto } from './dto/update-store-status.dto';
 import type { CreateScheduleDto } from './dto/create-schedule.dto';
+import type { UpdateScheduleDto } from './dto/update-schedule.dto';
 import type { CreateClosureDto } from './dto/create-closure.dto';
+import type { AssignStaffDto } from './dto/assign-staff.dto';
 
 @Injectable()
 export class StoresService {
@@ -29,10 +33,11 @@ export class StoresService {
 
       await tx.outboxEvent.create({
         data: {
-          aggregateId:   created.id,
-          aggregateType: 'Store',
-          eventType:     'StoreCreated',
-          eventVersion:  1,
+          aggregateId:    created.id,
+          aggregateType:  'Store',
+          eventType:      'StoreCreated',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
           payload: {
             eventType:    'StoreCreated',
             eventVersion: 1,
@@ -42,6 +47,7 @@ export class StoresService {
               storeId:  created.id,
               ownerId,
               name:     created.name,
+              type:     created.type,
               location: created.location,
               status:   'OPEN',
             },
@@ -57,7 +63,7 @@ export class StoresService {
           targetId:   created.id,
           targetType: 'Store',
           action:     AuditAction.STORE_CREATED,
-          newValue:   { name: created.name, location: created.location } as never,
+          newValue:   { name: created.name, type: created.type, location: created.location } as never,
         },
       });
 
@@ -137,10 +143,11 @@ export class StoresService {
 
       await tx.outboxEvent.create({
         data: {
-          aggregateId:   id,
-          aggregateType: 'Store',
-          eventType:     'StoreStatusChanged',
-          eventVersion:  1,
+          aggregateId:    id,
+          aggregateType:  'Store',
+          eventType:      'StoreStatusChanged',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
           payload: {
             eventType:    'StoreStatusChanged',
             eventVersion: 1,
@@ -211,7 +218,7 @@ export class StoresService {
     storeId: string,
     dto: CreateClosureDto,
     actorId: string,
-    _correlationId: string,
+    correlationId: string,
   ) {
     await this.loadStore(storeId);
 
@@ -225,6 +232,7 @@ export class StoresService {
     const overlap = await this.prisma.storeClosure.findFirst({
       where: {
         storeId,
+        status: { in: ['SCHEDULED', 'ACTIVE'] },
         AND: [
           { startDate: { lt: dto.endDate } },
           { endDate:   { gt: dto.startDate } },
@@ -268,9 +276,207 @@ export class StoresService {
   async listClosures(storeId: string) {
     await this.loadStore(storeId);
     return this.prisma.storeClosure.findMany({
-      where: { storeId, endDate: { gt: new Date() } },
+      where: {
+        storeId,
+        status: { in: ['SCHEDULED', 'ACTIVE'] },
+        endDate: { gt: new Date() },
+      },
       orderBy: { startDate: 'asc' },
     });
+  }
+
+  // ─── Public / Buyer endpoints ────────────────────────────────────────────────
+
+  async listAvailable(type?: StoreType) {
+    const stores = await this.prisma.store.findMany({
+      where:   { isActive: true, ...(type ? { type } : {}) },
+      include: { schedules: { where: { isActive: true } } },
+      orderBy: { name: 'asc' },
+    });
+    return stores.map((s) => ({ ...this.formatStore(s), schedules: s.schedules }));
+  }
+
+  async getPublicDetail(storeId: string) {
+    const store = await this.prisma.store.findUnique({
+      where:   { id: storeId, isActive: true },
+      include: { schedules: { where: { isActive: true }, orderBy: { dayOfWeek: 'asc' } } },
+    });
+    if (!store) throw new NotFoundException('Tienda no encontrada');
+    return { ...this.formatStore(store), schedules: store.schedules };
+  }
+
+  async getMyStores(userId: string) {
+    const stores = await this.prisma.store.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { ownerId: userId },
+          { staff: { some: { userId, isActive: true } } },
+        ],
+      },
+      include: { schedules: { where: { isActive: true } } },
+      orderBy: { name: 'asc' },
+    });
+    return stores.map((s) => ({ ...this.formatStore(s), schedules: s.schedules }));
+  }
+
+  // ─── Schedule update / delete ────────────────────────────────────────────────
+
+  async updateSchedule(
+    storeId:    string,
+    scheduleId: string,
+    dto:        UpdateScheduleDto,
+    actorId:    string,
+    isAdmin:    boolean,
+  ) {
+    const store = await this.loadStore(storeId);
+    this.assertOwnership(store.ownerId, actorId, isAdmin);
+
+    const schedule = await this.prisma.storeSchedule.findFirst({
+      where: { id: scheduleId, storeId },
+    });
+    if (!schedule) throw new NotFoundException('Horario no encontrado');
+
+    const openTime  = dto.openTime  ?? schedule.openTime;
+    const closeTime = dto.closeTime ?? schedule.closeTime;
+    if (openTime >= closeTime) {
+      throw new BadRequestException('openTime debe ser anterior a closeTime');
+    }
+
+    return this.prisma.storeSchedule.update({
+      where: { id: scheduleId },
+      data:  { openTime, closeTime, isActive: dto.isActive ?? schedule.isActive },
+    });
+  }
+
+  async deleteSchedule(
+    storeId:    string,
+    scheduleId: string,
+    actorId:    string,
+    isAdmin:    boolean,
+  ) {
+    const store = await this.loadStore(storeId);
+    this.assertOwnership(store.ownerId, actorId, isAdmin);
+
+    const schedule = await this.prisma.storeSchedule.findFirst({
+      where: { id: scheduleId, storeId },
+    });
+    if (!schedule) throw new NotFoundException('Horario no encontrado');
+
+    await this.prisma.storeSchedule.delete({ where: { id: scheduleId } });
+    return { message: 'Horario eliminado' };
+  }
+
+  // ─── Closure cancel ──────────────────────────────────────────────────────────
+
+  async cancelClosure(storeId: string, closureId: string, actorId: string) {
+    await this.loadStore(storeId);
+
+    const closure = await this.prisma.storeClosure.findFirst({
+      where: { id: closureId, storeId },
+    });
+    if (!closure) throw new NotFoundException('Cierre temporal no encontrado');
+    if (closure.status === ClosureStatus.EXPIRED || closure.status === ClosureStatus.CANCELLED) {
+      throw new BadRequestException('Solo se pueden cancelar cierres activos o programados');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.storeClosure.update({
+        where: { id: closureId },
+        data:  { status: ClosureStatus.CANCELLED, cancelledBy: actorId, cancelledAt: new Date() },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetId:   closureId,
+          targetType: 'StoreClosure',
+          action:     AuditAction.STORE_CLOSURE_CANCELLED,
+          oldValue:   { status: closure.status } as never,
+          newValue:   { status: ClosureStatus.CANCELLED } as never,
+        },
+      });
+    });
+
+    return { message: 'Cierre temporal cancelado' };
+  }
+
+  // ─── Staff management ────────────────────────────────────────────────────────
+
+  async assignStaff(storeId: string, dto: AssignStaffDto, actorId: string) {
+    await this.loadStore(storeId);
+
+    const user = await this.prisma.user.findUnique({
+      where:   { id: dto.userId },
+      include: { userRoles: { include: { role: true } } },
+    });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    const hasOperativeRole = user.userRoles.some(
+      (ur) => ur.role.name === 'VENDOR' || ur.role.name === 'ADMIN',
+    );
+    if (!hasOperativeRole) {
+      throw new UnprocessableEntityException(
+        'El usuario debe tener rol VENDOR o ADMIN para ser asignado como staff',
+      );
+    }
+
+    const existing = await this.prisma.storeStaff.findUnique({
+      where: { storeId_userId: { storeId, userId: dto.userId } },
+    });
+    if (existing?.isActive) {
+      throw new ConflictException('El usuario ya está asignado a este punto de venta');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (existing) {
+        await tx.storeStaff.update({
+          where: { id: existing.id },
+          data:  { isActive: true, assignedBy: actorId, assignedAt: new Date(), removedBy: null, removedAt: null },
+        });
+      } else {
+        await tx.storeStaff.create({
+          data: { storeId, userId: dto.userId, assignedBy: actorId },
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetId:   storeId,
+          targetType: 'Store',
+          action:     AuditAction.STORE_STAFF_ASSIGNED,
+          newValue:   { userId: dto.userId } as never,
+        },
+      });
+    });
+
+    return { storeId, userId: dto.userId, message: 'Vendedor asignado correctamente' };
+  }
+
+  async removeStaff(storeId: string, staffUserId: string, actorId: string) {
+    await this.loadStore(storeId);
+
+    const entry = await this.prisma.storeStaff.findUnique({
+      where: { storeId_userId: { storeId, userId: staffUserId } },
+    });
+    if (!entry?.isActive) throw new NotFoundException('El vendedor no está asignado a este punto de venta');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.storeStaff.update({
+        where: { id: entry.id },
+        data:  { isActive: false, removedBy: actorId, removedAt: new Date() },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetId:   storeId,
+          targetType: 'Store',
+          action:     AuditAction.STORE_STAFF_REMOVED,
+          oldValue:   { userId: staffUserId } as never,
+        },
+      });
+    });
+
+    return { message: 'Vendedor removido del punto de venta' };
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -302,6 +508,7 @@ export class StoresService {
     id: string;
     ownerId: string;
     name: string;
+    type: StoreType;
     description?: string | null;
     location: string;
     imageUrl?: string | null;
@@ -314,6 +521,7 @@ export class StoresService {
       id:          store.id,
       ownerId:     store.ownerId,
       name:        store.name,
+      type:        store.type,
       description: store.description ?? null,
       location:    store.location,
       imageUrl:    store.imageUrl ?? null,

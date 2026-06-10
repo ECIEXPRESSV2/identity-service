@@ -1,9 +1,12 @@
 import {
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import { AuditAction, UserStatus } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import type { SyncProfileDto } from './dto/sync-profile.dto';
 import type { UpdateProfileDto } from './dto/update-profile.dto';
@@ -13,6 +16,42 @@ export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
 
+
+  async listUsers(filters: {
+    search?:  string;
+    status?:  UserStatus;
+    role?:    string;
+  }, page: number, limit: number) {
+    const where: Prisma.UserWhereInput = {};
+
+    if (filters.search) {
+      where.OR = [
+        { email:    { contains: filters.search, mode: 'insensitive' } },
+        { fullName: { contains: filters.search, mode: 'insensitive' } },
+      ];
+    }
+    if (filters.status) where.status = filters.status;
+    if (filters.role) {
+      where.userRoles = { some: { role: { name: { equals: filters.role, mode: 'insensitive' } } } };
+    }
+
+    const skip = (page - 1) * limit;
+    const [total, users] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        include: { userRoles: { include: { role: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    return {
+      data:  users.map((u) => this.formatUser(u)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
 
   async syncProfile(
     firebaseUid: string,
@@ -52,24 +91,25 @@ export class UsersService {
 
       await tx.outboxEvent.create({
         data: {
-          aggregateId: user.id,
-          aggregateType: 'User',
-          eventType: 'UserRegistered',
-          eventVersion: 1,
+          aggregateId:    user.id,
+          aggregateType:  'User',
+          eventType:      'UserRegistered',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
           payload: {
-            eventType: 'UserRegistered',
+            eventType:    'UserRegistered',
             eventVersion: 1,
             correlationId,
-            occurredAt: new Date().toISOString(),
+            occurredAt:   new Date().toISOString(),
             payload: {
-              userId: user.id,
+              userId:     user.id,
               firebaseUid: user.firebaseUid,
-              email: user.email,
-              fullName: user.fullName,
+              email:      user.email,
+              fullName:   user.fullName,
               systemRole: 'BUYER',
             },
           },
-          status: 'PENDING',
+          status:     'PENDING',
           retryCount: 0,
         },
       });
@@ -131,18 +171,19 @@ export class UsersService {
 
       await tx.outboxEvent.create({
         data: {
-          aggregateId: userId,
-          aggregateType: 'User',
-          eventType: 'UserProfileUpdated',
-          eventVersion: 1,
+          aggregateId:    userId,
+          aggregateType:  'User',
+          eventType:      'UserProfileUpdated',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
           payload: {
-            eventType: 'UserProfileUpdated',
+            eventType:    'UserProfileUpdated',
             eventVersion: 1,
             correlationId,
-            occurredAt: new Date().toISOString(),
+            occurredAt:   new Date().toISOString(),
             payload: { userId, changedFields, newValues: dto },
           },
-          status: 'PENDING',
+          status:     'PENDING',
           retryCount: 0,
         },
       });
@@ -171,6 +212,10 @@ export class UsersService {
     actorId: string,
     correlationId: string,
   ) {
+    if (actorId === targetId && status !== UserStatus.ACTIVE) {
+      throw new ForbiddenException('Un administrador no puede desactivarse a sí mismo');
+    }
+
     const user = await this.prisma.user.findUnique({ where: { id: targetId } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
 
@@ -198,18 +243,19 @@ export class UsersService {
       if (status === UserStatus.INACTIVE || status === UserStatus.SUSPENDED) {
         await tx.outboxEvent.create({
           data: {
-            aggregateId: targetId,
-            aggregateType: 'User',
-            eventType: 'UserDeactivated',
-            eventVersion: 1,
+            aggregateId:    targetId,
+            aggregateType:  'User',
+            eventType:      'UserDeactivated',
+            eventVersion:   1,
+            idempotencyKey: randomUUID(),
             payload: {
-              eventType: 'UserDeactivated',
+              eventType:    'UserDeactivated',
               eventVersion: 1,
               correlationId,
-              occurredAt: new Date().toISOString(),
+              occurredAt:   new Date().toISOString(),
               payload: { userId: targetId, reason: status },
             },
-            status: 'PENDING',
+            status:     'PENDING',
             retryCount: 0,
           },
         });

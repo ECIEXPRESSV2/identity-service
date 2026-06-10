@@ -68,7 +68,7 @@ describe('PermissionsGuard', () => {
   it('passes when user has the required permission', async () => {
     guard = new PermissionsGuard(makeReflector(['store:read']), mockPrisma as never, cacheService);
     mockPrisma.userRole.findMany.mockResolvedValue(
-      makeUserRoles(['SELLER'], [['store:read', 'store:write']]),
+      makeUserRoles(['VENDOR'], [['store:read', 'store:write']]),
     );
 
     const result = await guard.canActivate(makeContext('seller-1'));
@@ -91,7 +91,7 @@ describe('PermissionsGuard', () => {
       cacheService,
     );
     mockPrisma.userRole.findMany.mockResolvedValue(
-      makeUserRoles(['SELLER'], [['store:write']]),
+      makeUserRoles(['VENDOR'], [['store:write']]),
     );
 
     const result = await guard.canActivate(makeContext('seller-2'));
@@ -101,7 +101,7 @@ describe('PermissionsGuard', () => {
   it('uses cache on second request — DB is only queried once per TTL window', async () => {
     guard = new PermissionsGuard(makeReflector(['store:read']), mockPrisma as never, cacheService);
     mockPrisma.userRole.findMany.mockResolvedValue(
-      makeUserRoles(['SELLER'], [['store:read']]),
+      makeUserRoles(['VENDOR'], [['store:read']]),
     );
 
     await guard.canActivate(makeContext('seller-3'));
@@ -113,7 +113,7 @@ describe('PermissionsGuard', () => {
   it('re-queries DB after cache is invalidated', async () => {
     guard = new PermissionsGuard(makeReflector(['store:read']), mockPrisma as never, cacheService);
     mockPrisma.userRole.findMany.mockResolvedValue(
-      makeUserRoles(['SELLER'], [['store:read']]),
+      makeUserRoles(['VENDOR'], [['store:read']]),
     );
 
     await guard.canActivate(makeContext('seller-4'));
@@ -126,7 +126,7 @@ describe('PermissionsGuard', () => {
   it('re-queries DB after TTL expires', async () => {
     guard = new PermissionsGuard(makeReflector(['store:read']), mockPrisma as never, cacheService);
     mockPrisma.userRole.findMany.mockResolvedValue(
-      makeUserRoles(['SELLER'], [['store:read']]),
+      makeUserRoles(['VENDOR'], [['store:read']]),
     );
 
     jest.spyOn(Date, 'now')

@@ -7,6 +7,8 @@ import { UsersModule } from './users/users.module';
 import { RolesModule } from './roles/roles.module';
 import { StoresModule } from './stores/stores.module';
 import { OutboxModule } from './outbox/outbox.module';
+import { AuditModule } from './audit/audit.module';
+import { InternalModule } from './internal/internal.module';
 import { FirebaseAuthGuard } from './common/guards/firebase-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { CorrelationIdInterceptor } from './common/interceptors/correlation-id.interceptor';
@@ -21,6 +23,8 @@ import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
     RolesModule,
     StoresModule,
     OutboxModule,
+    AuditModule,
+    InternalModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
