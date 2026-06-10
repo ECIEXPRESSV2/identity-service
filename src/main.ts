@@ -44,9 +44,7 @@ function openSwaggerIfBrowserOpen(url: string): void {
       const { timestamp } = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf-8')) as {
         timestamp: number;
       };
-      if (Date.now() - timestamp < HOT_RELOAD_WINDOW_MS) {
-        return;
-      }
+      if (Date.now() - timestamp < HOT_RELOAD_WINDOW_MS) return;
     } catch {
     }
   }
@@ -58,35 +56,49 @@ function openSwaggerIfBrowserOpen(url: string): void {
 }
 
 function cleanupLock(): void {
-  try {
-    fs.unlinkSync(LOCK_FILE);
-  } catch {
-    
-  }
+  try { fs.unlinkSync(LOCK_FILE); } catch { }
 }
 
-process.on('SIGTERM', () => {
-  cleanupLock();
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  cleanupLock();
-  process.exit(0);
-});
+process.on('SIGTERM', () => { cleanupLock(); process.exit(0); });
+process.on('SIGINT',  () => { cleanupLock(); process.exit(0); });
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   const config = new DocumentBuilder()
     .setTitle('Identity & Administration Service')
-    .setDescription('ECIxpress — Identity & Administration API')
+    .setDescription(
+      `Microservicio de identidad y administración de la plataforma **ECIxpress**.\n\n` +
+      `## Autenticación\n` +
+      `Todos los endpoints protegidos requieren un **Firebase ID Token** en el header:\n` +
+      "`Authorization: Bearer <idToken>`\n\n" +
+      `El token se obtiene autenticándose con Firebase Auth (email/password o Google).\n\n` +
+      `## Roles del sistema\n` +
+      `| Rol | Descripción |\n` +
+      `|-----|-------------|\n` +
+      `| BUYER | Comprador — rol por defecto al registrarse |\n` +
+      `| SELLER | Vendedor — dueño de puntos de venta |\n` +
+      `| ADMIN | Administrador — acceso total |\n` +
+      `| ANALYST | Analista — solo lectura |\n\n` +
+      `## Exportar especificación\n` +
+      `- JSON: \`GET /api-json\`\n` +
+      `- YAML: \`GET /api-yaml\``
+    )
     .setVersion('1.0')
-    .addBearerAuth()
+    .addBearerAuth(
+      { type: 'http', scheme: 'bearer', bearerFormat: 'Firebase ID Token' },
+      'bearer',
+    )
+    .addTag('Auth',   'Autenticación, sincronización de perfil y validación de tokens')
+    .addTag('Users',  'Gestión de perfiles de usuario')
+    .addTag('Roles',  'Asignación y revocación de roles a usuarios')
+    .addTag('Stores', 'Puntos de venta, horarios regulares y cierres temporales')
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api', app, document);
+  SwaggerModule.setup('api', app, document, {
+    swaggerOptions: { persistAuthorization: true },
+  });
 
   const port = process.env.PORT ?? 3001;
   await app.listen(port);

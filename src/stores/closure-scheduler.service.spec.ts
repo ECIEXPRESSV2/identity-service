@@ -1,5 +1,9 @@
 import { ClosureSchedulerService } from './closure-scheduler.service';
 
+type WithProcessJob = {
+  processJob(job: { name: string; data: { storeId: string; closureId: string; correlationId: string } }): Promise<void>;
+};
+
 const mockPrisma = {
   store:       { findUnique: jest.fn(), update: jest.fn() },
   outboxEvent: { create: jest.fn() },
@@ -26,7 +30,7 @@ describe('ClosureSchedulerService — processJob', () => {
     const scheduler = makeScheduler();
     mockPrisma.store.findUnique.mockResolvedValue(null);
 
-    await (scheduler as never)['processJob'](makeJob('close-store'));
+    await (scheduler as unknown as WithProcessJob).processJob(makeJob('close-store'));
 
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
@@ -35,7 +39,7 @@ describe('ClosureSchedulerService — processJob', () => {
     const scheduler = makeScheduler();
     mockPrisma.store.findUnique.mockResolvedValue({ id: 'store-1', status: 'TEMPORARILY_CLOSED' });
 
-    await (scheduler as never)['processJob'](makeJob('close-store'));
+    await (scheduler as unknown as WithProcessJob).processJob(makeJob('close-store'));
 
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
@@ -44,7 +48,7 @@ describe('ClosureSchedulerService — processJob', () => {
     const scheduler = makeScheduler();
     mockPrisma.store.findUnique.mockResolvedValue({ id: 'store-1', status: 'OPEN' });
 
-    await (scheduler as never)['processJob'](makeJob('reopen-store'));
+    await (scheduler as unknown as WithProcessJob).processJob(makeJob('reopen-store'));
 
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
@@ -54,7 +58,7 @@ describe('ClosureSchedulerService — processJob', () => {
     mockPrisma.store.findUnique.mockResolvedValue({ id: 'store-1', status: 'OPEN' });
     mockPrisma.outboxEvent.create.mockResolvedValue({});
 
-    await (scheduler as never)['processJob'](makeJob('close-store'));
+    await (scheduler as unknown as WithProcessJob).processJob(makeJob('close-store'));
 
     expect(mockPrisma.outboxEvent.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -71,7 +75,7 @@ describe('ClosureSchedulerService — processJob', () => {
     mockPrisma.store.findUnique.mockResolvedValue({ id: 'store-1', status: 'TEMPORARILY_CLOSED' });
     mockPrisma.outboxEvent.create.mockResolvedValue({});
 
-    await (scheduler as never)['processJob'](makeJob('reopen-store'));
+    await (scheduler as unknown as WithProcessJob).processJob(makeJob('reopen-store'));
 
     const payload = mockPrisma.outboxEvent.create.mock.calls[0][0].data.payload.payload;
     expect(payload.newStatus).toBe('OPEN');

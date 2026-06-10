@@ -42,14 +42,13 @@ export class FirebaseAuthGuard implements CanActivate {
 
     const req = context.switchToHttp().getRequest<RequestWithUser>();
 
-    // Genera o propaga correlationId antes de cualquier throw
     req.correlationId =
       (req.headers['x-correlation-id'] as string | undefined) ?? randomUUID();
 
     if (!isPublic) {
       const token = this.extractToken(req);
-      const firebaseUid = await this.verifyToken(token);
-      req.user = await this.loadUser(firebaseUid, req.correlationId);
+      const { uid, email } = await this.verifyToken(token);
+      req.user = await this.loadUser(uid, email, req.correlationId);
     }
 
     return true;
@@ -65,10 +64,10 @@ export class FirebaseAuthGuard implements CanActivate {
     return header.slice(7);
   }
 
-  private async verifyToken(token: string): Promise<string> {
+  private async verifyToken(token: string): Promise<{ uid: string; email: string }> {
     try {
       const decoded = await admin.auth().verifyIdToken(token);
-      return decoded.uid;
+      return { uid: decoded.uid, email: decoded.email ?? '' };
     } catch (err: unknown) {
       const code = (err as { code?: string }).code ?? '';
       if (code === 'auth/id-token-expired') {
@@ -83,6 +82,7 @@ export class FirebaseAuthGuard implements CanActivate {
 
   private async loadUser(
     firebaseUid: string,
+    email: string,
     correlationId: string,
   ): Promise<AuthenticatedUser> {
     const dbUser = await this.prisma.user.findUnique({
@@ -103,10 +103,11 @@ export class FirebaseAuthGuard implements CanActivate {
       },
     });
 
+    // Usuario verificado por Firebase pero sin perfil local todavía.
+    // Solo sync-profile necesita este estado; los demás endpoints
+    // fallarán por falta de userId o permisos, que es el comportamiento correcto.
     if (!dbUser) {
-      throw new UnauthorizedException(
-        'Usuario no encontrado — realiza POST /auth/sync-profile primero',
-      );
+      return { userId: '', firebaseUid, email, roles: [], permissions: [], correlationId };
     }
 
     const roles = dbUser.userRoles.map((ur) => ur.role.name);

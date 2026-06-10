@@ -10,7 +10,7 @@ const logger = pino({ name: 'rabbitmq' });
 
 @Injectable()
 export class RabbitMQService implements OnApplicationBootstrap, OnApplicationShutdown {
-  private connection: amqplib.Connection | null = null;
+  private connection: amqplib.ChannelModel | null = null;
   private channel: amqplib.Channel | null = null;
 
   private readonly url = process.env['RABBITMQ_URL'] ?? '';

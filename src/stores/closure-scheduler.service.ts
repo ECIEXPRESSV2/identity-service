@@ -4,7 +4,6 @@ import {
   OnApplicationShutdown,
 } from '@nestjs/common';
 import { Queue, Worker, type Job } from 'bullmq';
-import { Redis } from 'ioredis';
 import { randomUUID } from 'node:crypto';
 import pino from 'pino';
 import { PrismaService } from '../prisma/prisma.service';
@@ -34,13 +33,23 @@ export class ClosureSchedulerService implements OnApplicationBootstrap, OnApplic
     }
 
     try {
-      const connection = new Redis(url, { maxRetriesPerRequest: null });
+      const parsed     = new URL(url);
+      const connection = {
+        host:                 parsed.hostname,
+        port:                 Number(parsed.port) || 6379,
+        ...(parsed.password ? { password: decodeURIComponent(parsed.password) } : {}),
+        maxRetriesPerRequest: null as null,
+      };
       this.queue  = new Queue(QUEUE_NAME, { connection });
       this.worker = new Worker<ClosureJobData>(
         QUEUE_NAME,
         (job) => this.processJob(job),
         { connection },
       );
+
+      this.queue.on('error',  (err: Error) => logger.warn({ err: err.message }, 'Redis queue error'));
+      this.worker.on('error', (err: Error) => logger.warn({ err: err.message }, 'Redis worker error'));
+
       logger.info('Closure scheduler started');
     } catch (err) {
       logger.error({ err }, 'Failed to start closure scheduler — scheduling disabled');

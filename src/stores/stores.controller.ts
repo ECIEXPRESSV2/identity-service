@@ -1,4 +1,12 @@
 import { Body, Controller, Get, Param, Patch, Post, Put } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { StoresService } from './stores.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
@@ -11,12 +19,103 @@ import { CreateScheduleSchema, type CreateScheduleDto } from './dto/create-sched
 import { CreateClosureSchema, type CreateClosureDto } from './dto/create-closure.dto';
 import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
 
+const STORE_SCHEMA = {
+  type: 'object',
+  properties: {
+    id:          { type: 'string', format: 'uuid' },
+    ownerId:     { type: 'string', format: 'uuid' },
+    name:        { type: 'string' },
+    description: { type: 'string', nullable: true },
+    location:    { type: 'string' },
+    imageUrl:    { type: 'string', nullable: true },
+    status:      { type: 'string', enum: ['OPEN', 'CLOSED', 'TEMPORARILY_CLOSED'] },
+    isActive:    { type: 'boolean' },
+    createdAt:   { type: 'string', format: 'date-time' },
+    updatedAt:   { type: 'string', format: 'date-time' },
+  },
+  example: {
+    id:          'b2c3d4e5-f6a7-8901-bcde-f12345678901',
+    ownerId:     'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    name:        'Cafetería Bloque A',
+    description: 'Cafetería principal del campus',
+    location:    'Bloque A, piso 1',
+    imageUrl:    null,
+    status:      'OPEN',
+    isActive:    true,
+    createdAt:   '2026-06-10T01:00:00.000Z',
+    updatedAt:   '2026-06-10T01:00:00.000Z',
+  },
+};
+
+const SCHEDULE_SCHEMA = {
+  type: 'object',
+  properties: {
+    id:         { type: 'string', format: 'uuid' },
+    storeId:    { type: 'string', format: 'uuid' },
+    dayOfWeek:  { type: 'integer', minimum: 0, maximum: 6, description: '0=Domingo … 6=Sábado' },
+    openTime:   { type: 'string', example: '08:00' },
+    closeTime:  { type: 'string', example: '18:00' },
+    isActive:   { type: 'boolean' },
+    createdAt:  { type: 'string', format: 'date-time' },
+    updatedAt:  { type: 'string', format: 'date-time' },
+  },
+};
+
+const CLOSURE_SCHEMA = {
+  type: 'object',
+  properties: {
+    id:        { type: 'string', format: 'uuid' },
+    storeId:   { type: 'string', format: 'uuid' },
+    startDate: { type: 'string', format: 'date-time' },
+    endDate:   { type: 'string', format: 'date-time' },
+    reason:    { type: 'string', nullable: true },
+    createdBy: { type: 'string', format: 'uuid' },
+    createdAt: { type: 'string', format: 'date-time' },
+  },
+  example: {
+    id:        'c3d4e5f6-a7b8-9012-cdef-123456789012',
+    storeId:   'b2c3d4e5-f6a7-8901-bcde-f12345678901',
+    startDate: '2026-06-15T08:00:00.000Z',
+    endDate:   '2026-06-15T18:00:00.000Z',
+    reason:    'Mantenimiento programado',
+    createdBy: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    createdAt: '2026-06-10T01:00:00.000Z',
+  },
+};
+
+@ApiTags('Stores')
+@ApiBearerAuth()
 @Controller('stores')
 export class StoresController {
   constructor(private readonly storesService: StoresService) {}
 
+  // ── Stores ─────────────────────────────────────────────────────────────────
+
   @Post()
   @RequirePermission('store:write')
+  @ApiOperation({
+    summary: 'Crear punto de venta',
+    description:
+      'Crea un nuevo punto de venta asociado al usuario autenticado como dueño. ' +
+      'Requiere permiso `store:write`. ' +
+      'Publica el evento `StoreCreated` al bus de mensajería.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['name', 'location'],
+      properties: {
+        name:        { type: 'string', minLength: 2, maxLength: 100, example: 'Cafetería Bloque A' },
+        description: { type: 'string', maxLength: 500, example: 'Cafetería principal del campus' },
+        location:    { type: 'string', minLength: 2, maxLength: 200, example: 'Bloque A, piso 1' },
+        imageUrl:    { type: 'string', format: 'uri', example: 'https://storage.googleapis.com/img.jpg' },
+      },
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Tienda creada', schema: STORE_SCHEMA })
+  @ApiResponse({ status: 400, description: 'Campos obligatorios faltantes o inválidos' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `store:write` requerido' })
   create(
     @Body(new ZodValidationPipe(CreateStoreSchema)) dto: CreateStoreDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -26,18 +125,71 @@ export class StoresController {
 
   @Get()
   @Public()
+  @ApiOperation({
+    summary: 'Listar tiendas activas',
+    description: 'Retorna todas las tiendas activas. Endpoint público — no requiere autenticación.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de tiendas activas',
+    schema: { type: 'array', items: STORE_SCHEMA },
+  })
   list() {
     return this.storesService.listStores();
   }
 
   @Get(':id')
   @Public()
+  @ApiOperation({
+    summary: 'Ver detalle de una tienda',
+    description: 'Retorna la tienda con sus horarios regulares. Endpoint público.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Detalle de la tienda con horarios',
+    schema: {
+      allOf: [
+        STORE_SCHEMA,
+        {
+          properties: {
+            schedules: { type: 'array', items: SCHEDULE_SCHEMA },
+          },
+        },
+      ],
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
   findOne(@Param('id') id: string) {
     return this.storesService.findById(id);
   }
 
   @Put(':id')
   @RequirePermission('store:write')
+  @ApiOperation({
+    summary: 'Actualizar datos de una tienda',
+    description:
+      'Actualiza la información de la tienda. ' +
+      'Solo el dueño de la tienda o un ADMIN pueden modificarla. ' +
+      'No publica eventos (los cambios de estado van por PATCH /status).',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        name:        { type: 'string', minLength: 2, maxLength: 100 },
+        description: { type: 'string', maxLength: 500 },
+        location:    { type: 'string', minLength: 2, maxLength: 200 },
+        imageUrl:    { type: 'string', format: 'uri' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Tienda actualizada', schema: STORE_SCHEMA })
+  @ApiResponse({ status: 400, description: 'Campos inválidos' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Solo el dueño o ADMIN pueden modificar esta tienda' })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
   update(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(UpdateStoreSchema)) dto: UpdateStoreDto,
@@ -53,6 +205,34 @@ export class StoresController {
 
   @Patch(':id/status')
   @RequirePermission('store:write')
+  @ApiOperation({
+    summary: 'Cambiar estado de una tienda',
+    description:
+      'Cambia el estado operativo de la tienda. ' +
+      'Solo el dueño o un ADMIN pueden cambiar el estado. ' +
+      'Publica el evento `StoreStatusChanged`. ' +
+      '**Nota:** el estado `TEMPORARILY_CLOSED` es gestionado automáticamente por los cierres programados, no por este endpoint.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['status'],
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['OPEN', 'CLOSED'],
+          description: 'Estado manual. TEMPORARILY_CLOSED es solo para cierres programados.',
+        },
+        reason: { type: 'string', maxLength: 200, example: 'Cierre por mantenimiento' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Estado actualizado', schema: STORE_SCHEMA })
+  @ApiResponse({ status: 400, description: 'Status inválido' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Solo el dueño o ADMIN' })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
   patchStatus(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(UpdateStoreStatusSchema)) dto: UpdateStoreStatusDto,
@@ -67,8 +247,41 @@ export class StoresController {
     );
   }
 
+  // ── Schedules ──────────────────────────────────────────────────────────────
+
   @Post(':id/schedules')
   @RequirePermission('store:write')
+  @ApiOperation({
+    summary: 'Crear o actualizar horario de un día',
+    description:
+      'Upsert del horario para un día de la semana específico. ' +
+      'Si ya existe horario para ese día, lo reemplaza. ' +
+      'Solo el dueño o un ADMIN pueden gestionar horarios.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['dayOfWeek', 'openTime', 'closeTime', 'isActive'],
+      properties: {
+        dayOfWeek: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 6,
+          description: '0=Domingo, 1=Lunes, 2=Martes, 3=Miércoles, 4=Jueves, 5=Viernes, 6=Sábado',
+          example: 1,
+        },
+        openTime:  { type: 'string', pattern: '^\\d{2}:\\d{2}$', example: '08:00' },
+        closeTime: { type: 'string', pattern: '^\\d{2}:\\d{2}$', example: '18:00' },
+        isActive:  { type: 'boolean', example: true },
+      },
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Horario creado o actualizado', schema: SCHEDULE_SCHEMA })
+  @ApiResponse({ status: 400, description: 'openTime debe ser anterior a closeTime, o dayOfWeek fuera de rango' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Solo el dueño o ADMIN' })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
   upsertSchedule(
     @Param('id') storeId: string,
     @Body(new ZodValidationPipe(CreateScheduleSchema)) dto: CreateScheduleDto,
@@ -84,12 +297,65 @@ export class StoresController {
 
   @Get(':id/schedules')
   @Public()
+  @ApiOperation({
+    summary: 'Ver horarios de una tienda',
+    description: 'Retorna los horarios configurados por día de la semana. Endpoint público.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de horarios ordenados por día de la semana',
+    schema: { type: 'array', items: SCHEDULE_SCHEMA },
+  })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
   getSchedules(@Param('id') storeId: string) {
     return this.storesService.getSchedules(storeId);
   }
 
+  // ── Closures ───────────────────────────────────────────────────────────────
+
   @Post(':id/closures')
   @RequirePermission('store:close')
+  @ApiOperation({
+    summary: 'Programar cierre temporal',
+    description:
+      'Crea un cierre temporal con rango de fechas. ' +
+      'Al llegar `startDate`, la tienda cambia automáticamente a `TEMPORARILY_CLOSED` y se publica `StoreStatusChanged`. ' +
+      'Al llegar `endDate`, vuelve a `OPEN` automáticamente. ' +
+      'Requiere permiso `store:close`.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['startDate', 'endDate'],
+      properties: {
+        startDate: {
+          type: 'string',
+          format: 'date-time',
+          description: 'Debe ser una fecha futura',
+          example: '2026-06-15T08:00:00Z',
+        },
+        endDate: {
+          type: 'string',
+          format: 'date-time',
+          description: 'Debe ser posterior a startDate',
+          example: '2026-06-15T18:00:00Z',
+        },
+        reason: {
+          type: 'string',
+          maxLength: 200,
+          example: 'Mantenimiento programado de equipos',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Cierre programado', schema: CLOSURE_SCHEMA })
+  @ApiResponse({ status: 400, description: 'startDate en el pasado, endDate anterior a startDate, o reason > 200 caracteres' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `store:close` requerido' })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
+  @ApiResponse({ status: 409, description: 'Las fechas se solapan con un cierre existente' })
   createClosure(
     @Param('id') storeId: string,
     @Body(new ZodValidationPipe(CreateClosureSchema)) dto: CreateClosureDto,
@@ -100,6 +366,21 @@ export class StoresController {
 
   @Get(':id/closures')
   @RequirePermission('store:read')
+  @ApiOperation({
+    summary: 'Ver cierres programados de una tienda',
+    description:
+      'Lista los cierres futuros (endDate > ahora) ordenados por startDate ascendente. ' +
+      'Requiere permiso `store:read`.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Cierres programados',
+    schema: { type: 'array', items: CLOSURE_SCHEMA },
+  })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `store:read` requerido' })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
   listClosures(@Param('id') storeId: string) {
     return this.storesService.listClosures(storeId);
   }
