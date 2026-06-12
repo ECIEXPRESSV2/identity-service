@@ -38,13 +38,14 @@ function makePendingEvent(overrides: Partial<{
   nextRetryAt: Date | null;
 }> = {}) {
   return {
-    id:            overrides.id           ?? 'event-1',
-    aggregateType: 'User',
-    eventType:     'UserRegistered',
-    payload:       { userId: 'u-1' },
-    status:        'PENDING',
-    retryCount:    overrides.retryCount   ?? 0,
-    nextRetryAt:   overrides.nextRetryAt  ?? null,
+    id:             overrides.id          ?? 'event-1',
+    aggregateType:  'User',
+    eventType:      'UserRegistered',
+    payload:        { userId: 'u-1' },
+    status:         'PENDING',
+    retryCount:     overrides.retryCount  ?? 0,
+    nextRetryAt:    overrides.nextRetryAt ?? null,
+    idempotencyKey: 'idem-key-1',
   };
 }
 
@@ -81,7 +82,11 @@ describe('OutboxWorker.processOutbox', () => {
 
     expect(mockRabbit.publish).toHaveBeenCalledWith(
       'identity.user.registered',
-      event.payload,
+      expect.objectContaining({
+        ...event.payload,
+        source:         'identity-admin-service',
+        idempotencyKey: event.idempotencyKey,
+      }),
     );
     expect(mockPrisma.outboxEvent.update).toHaveBeenCalledWith(
       expect.objectContaining({

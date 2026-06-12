@@ -84,8 +84,8 @@ export class ClosureSchedulerService implements OnApplicationBootstrap, OnApplic
   }
 
   private async processJob(job: Job<ClosureJobData>): Promise<void> {
-    const { storeId, correlationId } = job.data;
-    const isClose  = job.name === 'close-store';
+    const { storeId, closureId, correlationId } = job.data;
+    const isClose   = job.name === 'close-store';
     const newStatus = isClose ? 'TEMPORARILY_CLOSED' : 'OPEN';
 
     const store = await this.prisma.store.findUnique({ where: { id: storeId } });
@@ -98,6 +98,8 @@ export class ClosureSchedulerService implements OnApplicationBootstrap, OnApplic
       logger.info({ storeId, status: newStatus }, 'Store already in target status — skipping');
       return;
     }
+
+    const now = new Date().toISOString();
 
     await this.prisma.$transaction(async (tx) => {
       await tx.store.update({ where: { id: storeId }, data: { status: newStatus } });
@@ -113,7 +115,7 @@ export class ClosureSchedulerService implements OnApplicationBootstrap, OnApplic
             eventType:    'StoreStatusChanged',
             eventVersion: 1,
             correlationId,
-            occurredAt:   new Date().toISOString(),
+            occurredAt:   now,
             payload: {
               storeId,
               previousStatus: store.status,
@@ -127,6 +129,34 @@ export class ClosureSchedulerService implements OnApplicationBootstrap, OnApplic
           retryCount: 0,
         },
       });
+
+      // On reopen: mark the closure as EXPIRED and publish StoreClosureExpired
+      if (!isClose) {
+        await tx.storeClosure.updateMany({
+          where: { id: closureId, status: { in: ['SCHEDULED', 'ACTIVE'] } },
+          data:  { status: 'EXPIRED', processedAt: new Date() },
+        });
+
+        await tx.outboxEvent.create({
+          data: {
+            aggregateId:    storeId,
+            aggregateType:  'Store',
+            eventType:      'StoreClosureExpired',
+            eventVersion:   1,
+            idempotencyKey: randomUUID(),
+            payload: {
+              eventType:    'StoreClosureExpired',
+              eventVersion: 1,
+              source:       'identity-admin-service',
+              correlationId,
+              occurredAt:   now,
+              payload: { storeId, closureId },
+            },
+            status:     'PENDING',
+            retryCount: 0,
+          },
+        });
+      }
     });
 
     logger.info({ storeId, newStatus, jobName: job.name }, 'Store status updated by closure job');

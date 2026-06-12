@@ -5,8 +5,9 @@ type WithProcessJob = {
 };
 
 const mockPrisma = {
-  store:       { findUnique: jest.fn(), update: jest.fn() },
-  outboxEvent: { create: jest.fn() },
+  store:        { findUnique: jest.fn(), update: jest.fn() },
+  storeClosure: { updateMany: jest.fn() },
+  outboxEvent:  { create: jest.fn() },
   $transaction: jest.fn(),
 };
 
@@ -70,15 +71,26 @@ describe('ClosureSchedulerService — processJob', () => {
     expect(payload.previousStatus).toBe('OPEN');
   });
 
-  it('sets OPEN and writes StoreStatusChanged outbox event on reopen', async () => {
+  it('sets OPEN, marks closure EXPIRED and writes StoreStatusChanged + StoreClosureExpired on reopen', async () => {
     const scheduler = makeScheduler();
     mockPrisma.store.findUnique.mockResolvedValue({ id: 'store-1', status: 'TEMPORARILY_CLOSED' });
     mockPrisma.outboxEvent.create.mockResolvedValue({});
+    mockPrisma.storeClosure.updateMany.mockResolvedValue({ count: 1 });
 
     await (scheduler as unknown as WithProcessJob).processJob(makeJob('reopen-store'));
 
-    const payload = mockPrisma.outboxEvent.create.mock.calls[0][0].data.payload.payload;
-    expect(payload.newStatus).toBe('OPEN');
-    expect(payload.previousStatus).toBe('TEMPORARILY_CLOSED');
+    // First outbox event: StoreStatusChanged
+    const statusPayload = mockPrisma.outboxEvent.create.mock.calls[0][0].data.payload.payload;
+    expect(statusPayload.newStatus).toBe('OPEN');
+    expect(statusPayload.previousStatus).toBe('TEMPORARILY_CLOSED');
+
+    // Second outbox event: StoreClosureExpired
+    expect(mockPrisma.outboxEvent.create).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.outboxEvent.create.mock.calls[1][0].data.eventType).toBe('StoreClosureExpired');
+
+    // Closure record marked EXPIRED
+    expect(mockPrisma.storeClosure.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'EXPIRED' }) }),
+    );
   });
 });

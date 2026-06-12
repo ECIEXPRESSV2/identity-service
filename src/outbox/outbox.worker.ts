@@ -82,8 +82,14 @@ export class OutboxWorker implements OnApplicationBootstrap, OnApplicationShutdo
   private async publishEvent(event: OutboxEvent): Promise<void> {
     const routingKey = toRoutingKey(event.aggregateType, event.eventType);
 
+    const envelope = {
+      ...(event.payload as object),
+      source:        'identity-admin-service',
+      idempotencyKey: event.idempotencyKey,
+    };
+
     try {
-      await this.rabbit.publish(routingKey, event.payload as object);
+      await this.rabbit.publish(routingKey, envelope);
       await this.prisma.outboxEvent.update({
         where: { id: event.id },
         data: { status: 'PUBLISHED', publishedAt: new Date() },

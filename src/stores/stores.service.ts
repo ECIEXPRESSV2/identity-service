@@ -95,12 +95,29 @@ export class StoresService {
     dto: UpdateStoreDto,
     actorId: string,
     isAdmin: boolean,
+    correlationId: string,
   ) {
     const store = await this.loadStore(id);
     this.assertOwnership(store.ownerId, actorId, isAdmin);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.store.update({ where: { id }, data: dto });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    id,
+          aggregateType:  'Store',
+          eventType:      'StoreUpdated',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'StoreUpdated', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { storeId: id, changedFields: Object.keys(dto), performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
 
       await tx.auditLog.create({
         data: {
@@ -187,6 +204,7 @@ export class StoresService {
     dto: CreateScheduleDto,
     actorId: string,
     isAdmin: boolean,
+    correlationId: string,
   ) {
     const store = await this.loadStore(storeId);
     this.assertOwnership(store.ownerId, actorId, isAdmin);
@@ -195,14 +213,30 @@ export class StoresService {
       throw new BadRequestException('openTime debe ser anterior a closeTime');
     }
 
-    return this.prisma.storeSchedule.upsert({
-      where: { storeId_dayOfWeek: { storeId, dayOfWeek: dto.dayOfWeek } },
-      update: {
-        openTime:  dto.openTime,
-        closeTime: dto.closeTime,
-        isActive:  dto.isActive,
-      },
-      create: { storeId, ...dto },
+    return this.prisma.$transaction(async (tx) => {
+      const schedule = await tx.storeSchedule.upsert({
+        where:  { storeId_dayOfWeek: { storeId, dayOfWeek: dto.dayOfWeek } },
+        update: { openTime: dto.openTime, closeTime: dto.closeTime, isActive: dto.isActive },
+        create: { storeId, ...dto },
+      });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    storeId,
+          aggregateType:  'Store',
+          eventType:      'StoreScheduleChanged',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'StoreScheduleChanged', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { storeId, action: 'upserted', dayOfWeek: dto.dayOfWeek, performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
+
+      return schedule;
     });
   }
 
@@ -251,6 +285,26 @@ export class StoresService {
           endDate:   dto.endDate,
           reason:    dto.reason ?? null,
           createdBy: actorId,
+        },
+      });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    storeId,
+          aggregateType:  'Store',
+          eventType:      'StoreTemporarilyClosed',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'StoreTemporarilyClosed', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: {
+              storeId, closureId: c.id,
+              startsAt: dto.startDate, endsAt: dto.endDate,
+              reason: dto.reason ?? null, performedBy: actorId,
+            },
+          },
+          status: 'PENDING', retryCount: 0,
         },
       });
 
@@ -328,6 +382,7 @@ export class StoresService {
     dto:        UpdateScheduleDto,
     actorId:    string,
     isAdmin:    boolean,
+    correlationId: string,
   ) {
     const store = await this.loadStore(storeId);
     this.assertOwnership(store.ownerId, actorId, isAdmin);
@@ -343,9 +398,29 @@ export class StoresService {
       throw new BadRequestException('openTime debe ser anterior a closeTime');
     }
 
-    return this.prisma.storeSchedule.update({
-      where: { id: scheduleId },
-      data:  { openTime, closeTime, isActive: dto.isActive ?? schedule.isActive },
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.storeSchedule.update({
+        where: { id: scheduleId },
+        data:  { openTime, closeTime, isActive: dto.isActive ?? schedule.isActive },
+      });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    storeId,
+          aggregateType:  'Store',
+          eventType:      'StoreScheduleChanged',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'StoreScheduleChanged', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { storeId, action: 'updated', scheduleId, performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
+
+      return updated;
     });
   }
 
@@ -354,6 +429,7 @@ export class StoresService {
     scheduleId: string,
     actorId:    string,
     isAdmin:    boolean,
+    correlationId: string,
   ) {
     const store = await this.loadStore(storeId);
     this.assertOwnership(store.ownerId, actorId, isAdmin);
@@ -363,13 +439,32 @@ export class StoresService {
     });
     if (!schedule) throw new NotFoundException('Horario no encontrado');
 
-    await this.prisma.storeSchedule.delete({ where: { id: scheduleId } });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.storeSchedule.delete({ where: { id: scheduleId } });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    storeId,
+          aggregateType:  'Store',
+          eventType:      'StoreScheduleChanged',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'StoreScheduleChanged', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { storeId, action: 'deleted', scheduleId, performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
+    });
+
     return { message: 'Horario eliminado' };
   }
 
   // ─── Closure cancel ──────────────────────────────────────────────────────────
 
-  async cancelClosure(storeId: string, closureId: string, actorId: string) {
+  async cancelClosure(storeId: string, closureId: string, actorId: string, correlationId: string) {
     await this.loadStore(storeId);
 
     const closure = await this.prisma.storeClosure.findFirst({
@@ -385,6 +480,23 @@ export class StoresService {
         where: { id: closureId },
         data:  { status: ClosureStatus.CANCELLED, cancelledBy: actorId, cancelledAt: new Date() },
       });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    storeId,
+          aggregateType:  'Store',
+          eventType:      'StoreClosureCancelled',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'StoreClosureCancelled', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { storeId, closureId, performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
+
       await tx.auditLog.create({
         data: {
           actorId,
@@ -402,7 +514,7 @@ export class StoresService {
 
   // ─── Staff management ────────────────────────────────────────────────────────
 
-  async assignStaff(storeId: string, dto: AssignStaffDto, actorId: string) {
+  async assignStaff(storeId: string, dto: AssignStaffDto, actorId: string, correlationId: string) {
     await this.loadStore(storeId);
 
     const user = await this.prisma.user.findUnique({
@@ -438,6 +550,23 @@ export class StoresService {
           data: { storeId, userId: dto.userId, assignedBy: actorId },
         });
       }
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    storeId,
+          aggregateType:  'Store',
+          eventType:      'StoreStaffChanged',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'StoreStaffChanged', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { storeId, userId: dto.userId, action: 'assigned', performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
+
       await tx.auditLog.create({
         data: {
           actorId,
@@ -452,7 +581,7 @@ export class StoresService {
     return { storeId, userId: dto.userId, message: 'Vendedor asignado correctamente' };
   }
 
-  async removeStaff(storeId: string, staffUserId: string, actorId: string) {
+  async removeStaff(storeId: string, staffUserId: string, actorId: string, correlationId: string) {
     await this.loadStore(storeId);
 
     const entry = await this.prisma.storeStaff.findUnique({
@@ -465,6 +594,23 @@ export class StoresService {
         where: { id: entry.id },
         data:  { isActive: false, removedBy: actorId, removedAt: new Date() },
       });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    storeId,
+          aggregateType:  'Store',
+          eventType:      'StoreStaffChanged',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'StoreStaffChanged', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { storeId, userId: staffUserId, action: 'removed', performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
+
       await tx.auditLog.create({
         data: {
           actorId,

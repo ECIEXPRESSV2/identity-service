@@ -89,7 +89,7 @@ describe('StoresService', () => {
     mockPrisma.store.update.mockResolvedValue({ ...fakeStore, name: 'Nuevo nombre' });
     mockPrisma.auditLog.create.mockResolvedValue({});
 
-    const result = await service.updateStore(STORE_ID, { name: 'Nuevo nombre' }, OWNER_ID, false);
+    const result = await service.updateStore(STORE_ID, { name: 'Nuevo nombre' }, OWNER_ID, false, CORR_ID);
     expect(result.name).toBe('Nuevo nombre');
   });
 
@@ -100,7 +100,7 @@ describe('StoresService', () => {
     mockPrisma.auditLog.create.mockResolvedValue({});
 
     await expect(
-      service.updateStore(STORE_ID, { name: 'x' }, 'other-user', true),
+      service.updateStore(STORE_ID, { name: 'x' }, 'other-user', true, CORR_ID),
     ).resolves.toBeDefined();
   });
 
@@ -109,7 +109,7 @@ describe('StoresService', () => {
     mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
 
     await expect(
-      service.updateStore(STORE_ID, { name: 'hack' }, 'attacker', false),
+      service.updateStore(STORE_ID, { name: 'hack' }, 'attacker', false, CORR_ID),
     ).rejects.toThrow(ForbiddenException);
   });
 
@@ -147,7 +147,7 @@ describe('StoresService', () => {
     mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
 
     await expect(
-      service.upsertSchedule(STORE_ID, { dayOfWeek: 1, openTime: '18:00', closeTime: '08:00', isActive: true }, OWNER_ID, false),
+      service.upsertSchedule(STORE_ID, { dayOfWeek: 1, openTime: '18:00', closeTime: '08:00', isActive: true }, OWNER_ID, false, CORR_ID),
     ).rejects.toThrow(BadRequestException);
   });
 
@@ -156,7 +156,7 @@ describe('StoresService', () => {
     mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
 
     await expect(
-      service.upsertSchedule(STORE_ID, { dayOfWeek: 1, openTime: '08:00', closeTime: '08:00', isActive: true }, OWNER_ID, false),
+      service.upsertSchedule(STORE_ID, { dayOfWeek: 1, openTime: '08:00', closeTime: '08:00', isActive: true }, OWNER_ID, false, CORR_ID),
     ).rejects.toThrow(BadRequestException);
   });
 
@@ -167,7 +167,7 @@ describe('StoresService', () => {
     mockPrisma.storeSchedule.upsert.mockResolvedValue(schedule);
 
     const result = await service.upsertSchedule(
-      STORE_ID, { dayOfWeek: 1, openTime: '08:00', closeTime: '18:00', isActive: true }, OWNER_ID, false,
+      STORE_ID, { dayOfWeek: 1, openTime: '08:00', closeTime: '18:00', isActive: true }, OWNER_ID, false, CORR_ID,
     );
     expect(result.openTime).toBe('08:00');
   });
@@ -177,7 +177,7 @@ describe('StoresService', () => {
     mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
 
     await expect(
-      service.upsertSchedule(STORE_ID, { dayOfWeek: 1, openTime: '08:00', closeTime: '18:00', isActive: true }, 'attacker', false),
+      service.upsertSchedule(STORE_ID, { dayOfWeek: 1, openTime: '08:00', closeTime: '18:00', isActive: true }, 'attacker', false, CORR_ID),
     ).rejects.toThrow(ForbiddenException);
   });
 

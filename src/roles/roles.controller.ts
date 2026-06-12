@@ -130,7 +130,7 @@ export class RolesController {
     @Body('permissionIds')   permissionIds: string[],
     @CurrentUser()           actor: AuthenticatedUser,
   ) {
-    return this.rolesService.setRolePermissions(roleId, permissionIds ?? [], actor.userId);
+    return this.rolesService.setRolePermissions(roleId, permissionIds ?? [], actor.userId, actor.correlationId);
   }
 
   @Get('roles')
@@ -202,7 +202,7 @@ export class RolesController {
     @Body(new ZodValidationPipe(AssignRoleSchema)) dto: AssignRoleDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.rolesService.assignRole(userId, dto.roleId, actor.userId);
+    return this.rolesService.assignRole(userId, dto.roleId, actor.userId, actor.correlationId);
   }
 
   @Delete('users/:id/roles/:roleId')
@@ -227,6 +227,6 @@ export class RolesController {
     @Param('roleId') roleId: string,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.rolesService.revokeRole(userId, roleId, actor.userId);
+    return this.rolesService.revokeRole(userId, roleId, actor.userId, actor.correlationId);
   }
 }

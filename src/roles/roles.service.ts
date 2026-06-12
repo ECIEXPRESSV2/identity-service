@@ -6,6 +6,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { AuditAction } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { PermissionsCacheService } from '../common/services/permissions-cache.service';
 
@@ -47,7 +48,7 @@ export class RolesService {
     });
   }
 
-  async setRolePermissions(roleId: string, permissionIds: string[], actorId: string) {
+  async setRolePermissions(roleId: string, permissionIds: string[], actorId: string, correlationId: string) {
     const role = await this.prisma.role.findUnique({ where: { id: roleId } });
     if (!role) throw new NotFoundException('Rol no encontrado');
     if (role.isSystem) throw new UnprocessableEntityException('Los roles de sistema no pueden modificarse');
@@ -68,6 +69,23 @@ export class RolesService {
           data: permissionIds.map((permissionId) => ({ roleId, permissionId })),
         });
       }
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    roleId,
+          aggregateType:  'Role',
+          eventType:      'RoleUpdated',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'RoleUpdated', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { roleId, permissionIds, performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
+
       await tx.auditLog.create({
         data: {
           actorId,
@@ -95,7 +113,7 @@ export class RolesService {
     });
   }
 
-  async assignRole(userId: string, roleId: string, actorId: string) {
+  async assignRole(userId: string, roleId: string, actorId: string, correlationId: string) {
     const [user, role] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: userId } }),
       this.prisma.role.findUnique({ where: { id: roleId } }),
@@ -117,6 +135,22 @@ export class RolesService {
         data: { userId, roleId, assignedBy: actorId },
       });
 
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    userId,
+          aggregateType:  'User',
+          eventType:      'UserRoleChanged',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'UserRoleChanged', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { userId, roleId, roleName: role.name, action: 'assigned', performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
+
       await tx.auditLog.create({
         data: {
           actorId,
@@ -132,7 +166,7 @@ export class RolesService {
     return this.buildResponse(userId);
   }
 
-  async revokeRole(userId: string, roleId: string, actorId: string) {
+  async revokeRole(userId: string, roleId: string, actorId: string, correlationId: string) {
     const [user, role] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: userId } }),
       this.prisma.role.findUnique({ where: { id: roleId } }),
@@ -162,6 +196,22 @@ export class RolesService {
 
     await this.prisma.$transaction(async (tx) => {
       await tx.userRole.delete({ where: { id: assignment.id } });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    userId,
+          aggregateType:  'User',
+          eventType:      'UserRoleChanged',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'UserRoleChanged', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            payload: { userId, roleId, roleName: role.name, action: 'revoked', performedBy: actorId },
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
 
       await tx.auditLog.create({
         data: {

@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -74,16 +75,19 @@ export class UsersController {
   @ApiResponse({ status: 200, description: 'Perfil ya existente — retornado sin cambios', schema: USER_SCHEMA })
   @ApiResponse({ status: 400, description: 'Validación fallida — fullName es obligatorio' })
   @ApiResponse({ status: 401, description: 'Token de Firebase ausente, expirado o inválido' })
-  syncProfile(
+  async syncProfile(
     @CurrentUser() user: AuthenticatedUser,
     @Body(new ZodValidationPipe(SyncProfileSchema)) dto: SyncProfileDto,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.usersService.syncProfile(
+    const { created, ...profile } = await this.usersService.syncProfile(
       user.firebaseUid,
       user.email,
       dto,
       user.correlationId,
     );
+    res.status(created ? HttpStatus.CREATED : HttpStatus.OK);
+    return profile;
   }
 
   @Get('users')

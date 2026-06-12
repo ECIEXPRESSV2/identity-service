@@ -63,7 +63,7 @@ export class UsersService {
       where: { firebaseUid },
       include: { userRoles: { include: { role: true } } },
     });
-    if (existing) return this.formatUser(existing);
+    if (existing) return { created: false, ...this.formatUser(existing) };
 
     const buyerRole = await this.prisma.role.findFirst({
       where: { systemRole: 'BUYER' },
@@ -127,7 +127,7 @@ export class UsersService {
       return user;
     });
 
-    return this.formatUser({ ...newUser, userRoles: [{ role: buyerRole }] });
+    return { created: true, ...this.formatUser({ ...newUser, userRoles: [{ role: buyerRole }] }) };
   }
 
 
@@ -276,9 +276,11 @@ export class UsersService {
     phone?: string | null;
     avatarUrl?: string | null;
     status?: UserStatus;
+    createdAt?: Date | null;
     userRoles: { role: { name: string } }[];
   }) {
     return {
+      id: user.id,
       userId: user.id,
       firebaseUid: user.firebaseUid,
       email: user.email,
@@ -286,6 +288,7 @@ export class UsersService {
       phone: user.phone ?? null,
       avatarUrl: user.avatarUrl ?? null,
       status: user.status,
+      createdAt: user.createdAt?.toISOString() ?? null,
       roles: user.userRoles.map((ur) => ur.role.name),
     };
   }

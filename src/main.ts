@@ -65,6 +65,14 @@ process.on('SIGINT',  () => { cleanupLock(); process.exit(0); });
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  app.enableCors({
+    origin: ['http://localhost:5173', 'http://localhost:4173'],
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Correlation-Id'],
+    exposedHeaders: ['X-Correlation-Id'],
+    credentials: true,
+  });
+
   const config = new DocumentBuilder()
     .setTitle('Identity & Administration Service')
     .setDescription(

@@ -6,6 +6,7 @@ const mockPrisma = {
   user: { findUnique: jest.fn() },
   role: { findUnique: jest.fn(), findMany: jest.fn() },
   userRole: { findFirst: jest.fn(), findMany: jest.fn(), count: jest.fn(), create: jest.fn(), delete: jest.fn() },
+  outboxEvent: { create: jest.fn() },
   auditLog: { create: jest.fn() },
   $transaction: jest.fn(),
 };
@@ -19,9 +20,10 @@ function makeService() {
 const ACTOR_ID = 'actor-uuid';
 const USER_ID  = 'user-uuid';
 const ROLE_ID  = 'role-uuid';
+const CORR_ID  = 'corr-uuid';
 
 const fakeUser = { id: USER_ID, email: 'u@eci.edu.co' };
-const fakeRole = { id: ROLE_ID, name: 'VENDOR' };
+const fakeRole = { id: ROLE_ID, name: 'VENDOR', systemRole: null };
 const fakeAssignment = { id: 'assignment-uuid', userId: USER_ID, roleId: ROLE_ID };
 
 describe('RolesService', () => {
@@ -51,7 +53,7 @@ describe('RolesService', () => {
     mockPrisma.user.findUnique.mockResolvedValue(null);
     mockPrisma.role.findUnique.mockResolvedValue(fakeRole);
 
-    await expect(service.assignRole(USER_ID, ROLE_ID, ACTOR_ID)).rejects.toThrow(NotFoundException);
+    await expect(service.assignRole(USER_ID, ROLE_ID, ACTOR_ID, CORR_ID)).rejects.toThrow(NotFoundException);
   });
 
   it('throws NotFoundException when role does not exist', async () => {
@@ -59,7 +61,7 @@ describe('RolesService', () => {
     mockPrisma.user.findUnique.mockResolvedValue(fakeUser);
     mockPrisma.role.findUnique.mockResolvedValue(null);
 
-    await expect(service.assignRole(USER_ID, ROLE_ID, ACTOR_ID)).rejects.toThrow(NotFoundException);
+    await expect(service.assignRole(USER_ID, ROLE_ID, ACTOR_ID, CORR_ID)).rejects.toThrow(NotFoundException);
   });
 
   it('is idempotent — returns existing roles without creating a duplicate', async () => {
@@ -68,7 +70,7 @@ describe('RolesService', () => {
     mockPrisma.role.findUnique.mockResolvedValue(fakeRole);
     mockPrisma.userRole.findFirst.mockResolvedValue(fakeAssignment);
 
-    const result = await service.assignRole(USER_ID, ROLE_ID, ACTOR_ID);
+    const result = await service.assignRole(USER_ID, ROLE_ID, ACTOR_ID, CORR_ID);
 
     expect(mockPrisma.$transaction).not.toHaveBeenCalled();
     expect(cache.invalidate).not.toHaveBeenCalled();
@@ -83,7 +85,7 @@ describe('RolesService', () => {
     mockPrisma.userRole.create.mockResolvedValue(fakeAssignment);
     mockPrisma.auditLog.create.mockResolvedValue({});
 
-    const result = await service.assignRole(USER_ID, ROLE_ID, ACTOR_ID);
+    const result = await service.assignRole(USER_ID, ROLE_ID, ACTOR_ID, CORR_ID);
 
     expect(mockPrisma.userRole.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ userId: USER_ID, roleId: ROLE_ID }) }),
@@ -100,7 +102,7 @@ describe('RolesService', () => {
     mockPrisma.user.findUnique.mockResolvedValue(null);
     mockPrisma.role.findUnique.mockResolvedValue(fakeRole);
 
-    await expect(service.revokeRole(USER_ID, ROLE_ID, ACTOR_ID)).rejects.toThrow(NotFoundException);
+    await expect(service.revokeRole(USER_ID, ROLE_ID, ACTOR_ID, CORR_ID)).rejects.toThrow(NotFoundException);
   });
 
   it('throws ConflictException when role is not assigned to the user', async () => {
@@ -109,7 +111,7 @@ describe('RolesService', () => {
     mockPrisma.role.findUnique.mockResolvedValue(fakeRole);
     mockPrisma.userRole.findFirst.mockResolvedValue(null);
 
-    await expect(service.revokeRole(USER_ID, ROLE_ID, ACTOR_ID)).rejects.toThrow(ConflictException);
+    await expect(service.revokeRole(USER_ID, ROLE_ID, ACTOR_ID, CORR_ID)).rejects.toThrow(ConflictException);
   });
 
   it('throws BadRequestException when revoking the only role', async () => {
@@ -119,7 +121,7 @@ describe('RolesService', () => {
     mockPrisma.userRole.findFirst.mockResolvedValue(fakeAssignment);
     mockPrisma.userRole.count.mockResolvedValue(1);
 
-    await expect(service.revokeRole(USER_ID, ROLE_ID, ACTOR_ID)).rejects.toThrow(BadRequestException);
+    await expect(service.revokeRole(USER_ID, ROLE_ID, ACTOR_ID, CORR_ID)).rejects.toThrow(BadRequestException);
   });
 
   it('deletes userRole and audit log, then invalidates cache', async () => {
@@ -131,7 +133,7 @@ describe('RolesService', () => {
     mockPrisma.userRole.delete.mockResolvedValue({});
     mockPrisma.auditLog.create.mockResolvedValue({});
 
-    const result = await service.revokeRole(USER_ID, ROLE_ID, ACTOR_ID);
+    const result = await service.revokeRole(USER_ID, ROLE_ID, ACTOR_ID, CORR_ID);
 
     expect(mockPrisma.userRole.delete).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: fakeAssignment.id } }),

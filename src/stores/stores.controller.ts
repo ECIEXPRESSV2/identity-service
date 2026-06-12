@@ -142,6 +142,30 @@ export class StoresController {
     return this.storesService.listStores();
   }
 
+  // ── Public / Buyer endpoints — deben ir ANTES de /:id para evitar conflictos de ruteo ──
+
+  @Get('available')
+  @Public()
+  @ApiOperation({
+    summary: 'Listar tiendas disponibles',
+    description: 'Lista todas las tiendas activas. Filtrable por `type`. Ruta pública.',
+  })
+  @ApiResponse({ status: 200, description: 'Tiendas disponibles', schema: { type: 'array', items: STORE_SCHEMA } })
+  listAvailable(@Query('type') type?: string) {
+    return this.storesService.listAvailable(type as StoreType | undefined);
+  }
+
+  @Get('my')
+  @ApiOperation({
+    summary: 'Mis tiendas (vendedor)',
+    description: 'Retorna las tiendas donde el usuario autenticado es dueño o staff activo.',
+  })
+  @ApiResponse({ status: 200, description: 'Tiendas del vendedor', schema: { type: 'array', items: STORE_SCHEMA } })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  getMyStores(@CurrentUser() user: AuthenticatedUser) {
+    return this.storesService.getMyStores(user.userId);
+  }
+
   @Get(':id')
   @Public()
   @ApiOperation({
@@ -204,6 +228,7 @@ export class StoresController {
       dto,
       user.userId,
       user.roles.includes('ADMIN'),
+      user.correlationId,
     );
   }
 
@@ -296,6 +321,7 @@ export class StoresController {
       dto,
       user.userId,
       user.roles.includes('ADMIN'),
+      user.correlationId,
     );
   }
 
@@ -407,7 +433,7 @@ export class StoresController {
     @Param('closureId') closureId: string,
     @CurrentUser()      user:      AuthenticatedUser,
   ) {
-    return this.storesService.cancelClosure(storeId, closureId, user.userId);
+    return this.storesService.cancelClosure(storeId, closureId, user.userId, user.correlationId);
   }
 
   // ── Schedules CRUD ────────────────────────────────────────────────────────────
@@ -441,7 +467,7 @@ export class StoresController {
     @Body(new ZodValidationPipe(UpdateScheduleSchema)) dto: UpdateScheduleDto,
     @CurrentUser()       user: AuthenticatedUser,
   ) {
-    return this.storesService.updateSchedule(storeId, scheduleId, dto, user.userId, user.roles.includes('ADMIN'));
+    return this.storesService.updateSchedule(storeId, scheduleId, dto, user.userId, user.roles.includes('ADMIN'), user.correlationId);
   }
 
   @Delete(':id/schedules/:scheduleId')
@@ -461,7 +487,7 @@ export class StoresController {
     @Param('scheduleId') scheduleId: string,
     @CurrentUser()       user: AuthenticatedUser,
   ) {
-    return this.storesService.deleteSchedule(storeId, scheduleId, user.userId, user.roles.includes('ADMIN'));
+    return this.storesService.deleteSchedule(storeId, scheduleId, user.userId, user.roles.includes('ADMIN'), user.correlationId);
   }
 
   // ── Staff ─────────────────────────────────────────────────────────────────────
@@ -491,7 +517,7 @@ export class StoresController {
     @Body(new ZodValidationPipe(AssignStaffSchema)) dto: AssignStaffDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.storesService.assignStaff(storeId, dto, user.userId);
+    return this.storesService.assignStaff(storeId, dto, user.userId, user.correlationId);
   }
 
   @Delete(':id/staff/:userId')
@@ -511,31 +537,7 @@ export class StoresController {
     @Param('userId') staffUserId: string,
     @CurrentUser()   user: AuthenticatedUser,
   ) {
-    return this.storesService.removeStaff(storeId, staffUserId, user.userId);
-  }
-
-  // ── Public / Buyer endpoints ──────────────────────────────────────────────────
-
-  @Get('available')
-  @Public()
-  @ApiOperation({
-    summary: 'Listar tiendas disponibles',
-    description: 'Lista todas las tiendas activas. Filtrable por `type`. Ruta pública.',
-  })
-  @ApiResponse({ status: 200, description: 'Tiendas disponibles', schema: { type: 'array', items: STORE_SCHEMA } })
-  listAvailable(@Query('type') type?: string) {
-    return this.storesService.listAvailable(type as StoreType | undefined);
-  }
-
-  @Get('my')
-  @ApiOperation({
-    summary: 'Mis tiendas (vendedor)',
-    description: 'Retorna las tiendas donde el usuario autenticado es dueño o staff activo.',
-  })
-  @ApiResponse({ status: 200, description: 'Tiendas del vendedor', schema: { type: 'array', items: STORE_SCHEMA } })
-  @ApiResponse({ status: 401, description: 'Token inválido' })
-  getMyStores(@CurrentUser() user: AuthenticatedUser) {
-    return this.storesService.getMyStores(user.userId);
+    return this.storesService.removeStaff(storeId, staffUserId, user.userId, user.correlationId);
   }
 
   @Get(':id/public')
