@@ -84,10 +84,16 @@ export class StoresService {
   async findById(id: string) {
     const store = await this.prisma.store.findUnique({
       where: { id },
-      include: { schedules: { orderBy: { dayOfWeek: 'asc' } } },
+      include: {
+        schedules: { orderBy: { dayOfWeek: 'asc' } },
+        staff: {
+          where: { isActive: true },
+          include: { user: { select: { id: true, fullName: true, email: true } } },
+        },
+      },
     });
     if (!store) throw new NotFoundException('Tienda no encontrada');
-    return { ...this.formatStore(store), schedules: store.schedules };
+    return { ...this.formatStore(store), schedules: store.schedules, staff: store.staff };
   }
 
   async updateStore(
@@ -210,7 +216,7 @@ export class StoresService {
     this.assertOwnership(store.ownerId, actorId, isAdmin);
 
     if (dto.openTime >= dto.closeTime) {
-      throw new BadRequestException('openTime debe ser anterior a closeTime');
+      throw new BadRequestException('La hora de apertura debe ser anterior a la hora de cierre');
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -257,10 +263,10 @@ export class StoresService {
     await this.loadStore(storeId);
 
     if (dto.startDate <= new Date()) {
-      throw new BadRequestException('startDate debe ser una fecha futura');
+      throw new BadRequestException('La fecha de inicio debe ser una fecha futura');
     }
     if (dto.endDate <= dto.startDate) {
-      throw new BadRequestException('endDate debe ser posterior a startDate');
+      throw new BadRequestException('La fecha de fin debe ser posterior a la fecha de inicio');
     }
 
     const overlap = await this.prisma.storeClosure.findFirst({
@@ -395,7 +401,7 @@ export class StoresService {
     const openTime  = dto.openTime  ?? schedule.openTime;
     const closeTime = dto.closeTime ?? schedule.closeTime;
     if (openTime >= closeTime) {
-      throw new BadRequestException('openTime debe ser anterior a closeTime');
+      throw new BadRequestException('La hora de apertura debe ser anterior a la hora de cierre');
     }
 
     return this.prisma.$transaction(async (tx) => {
