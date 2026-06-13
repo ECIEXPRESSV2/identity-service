@@ -2,10 +2,10 @@ import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
-import { execSync, exec } from 'child_process';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { execSync, exec } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 const SERVICE_NAME = 'identity-service';
 const LOCK_FILE = path.join(os.tmpdir(), `${SERVICE_NAME}-swagger.lock`);
@@ -97,6 +97,7 @@ async function bootstrap() {
       { type: 'http', scheme: 'bearer', bearerFormat: 'Firebase ID Token' },
       'bearer',
     )
+    .addTag('App',    'Estado y salud del servicio')
     .addTag('Auth',   'Autenticación, sincronización de perfil y validación de tokens')
     .addTag('Users',  'Gestión de perfiles de usuario')
     .addTag('Roles',  'Asignación y revocación de roles a usuarios')
