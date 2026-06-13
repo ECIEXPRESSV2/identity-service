@@ -3,143 +3,127 @@ import {
   OnApplicationBootstrap,
   OnApplicationShutdown,
 } from '@nestjs/common';
-import { Queue, Worker, type Job } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 import pino from 'pino';
 import { PrismaService } from '../prisma/prisma.service';
 
 const logger = pino({ name: 'closure-scheduler' });
 
-const QUEUE_NAME = 'store-closures';
-
-interface ClosureJobData {
-  storeId:       string;
-  closureId:     string;
-  correlationId: string;
-}
+const POLL_MS = 30_000;
 
 @Injectable()
 export class ClosureSchedulerService implements OnApplicationBootstrap, OnApplicationShutdown {
-  private queue:  Queue  | null = null;
-  private worker: Worker | null = null;
+  private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async onApplicationBootstrap(): Promise<void> {
-    const url = process.env['REDIS_URL'];
-    if (!url) {
-      logger.warn('REDIS_URL not configured — closure scheduling disabled');
-      return;
-    }
-
-    try {
-      const parsed     = new URL(url);
-      const connection = {
-        host:                 parsed.hostname,
-        port:                 Number(parsed.port) || 6379,
-        ...(parsed.password ? { password: decodeURIComponent(parsed.password) } : {}),
-        maxRetriesPerRequest: null as null,
-      };
-      this.queue  = new Queue(QUEUE_NAME, { connection });
-      this.worker = new Worker<ClosureJobData>(
-        QUEUE_NAME,
-        (job) => this.processJob(job),
-        { connection },
-      );
-
-      this.queue.on('error',  (err: Error) => logger.warn({ err: err.message }, 'Redis queue error'));
-      this.worker.on('error', (err: Error) => logger.warn({ err: err.message }, 'Redis worker error'));
-
-      logger.info('Closure scheduler started');
-    } catch (err) {
-      logger.error({ err }, 'Failed to start closure scheduler — scheduling disabled');
-    }
+  onApplicationBootstrap(): void {
+    this.timer = setInterval(() => void this.poll(), POLL_MS);
+    logger.info('Closure scheduler started (polling every 30s)');
   }
 
-  async onApplicationShutdown(): Promise<void> {
-    await this.worker?.close();
-    await this.queue?.close();
+  onApplicationShutdown(): void {
+    if (this.timer) clearInterval(this.timer);
   }
 
-  async scheduleClose(storeId: string, startDate: Date, closureId: string): Promise<void> {
-    if (!this.queue) return;
-    const delay = Math.max(0, startDate.getTime() - Date.now());
-    await this.queue.add(
-      'close-store',
-      { storeId, closureId, correlationId: randomUUID() },
-      { delay, jobId: `close-${closureId}` },
-    );
-    logger.info({ storeId, closureId, delay }, 'Scheduled close-store job');
+  async poll(): Promise<void> {
+    await Promise.all([this.activateDueClosures(), this.expireDueClosures()]);
   }
 
-  async scheduleReopen(storeId: string, endDate: Date, closureId: string): Promise<void> {
-    if (!this.queue) return;
-    const delay = Math.max(0, endDate.getTime() - Date.now());
-    await this.queue.add(
-      'reopen-store',
-      { storeId, closureId, correlationId: randomUUID() },
-      { delay, jobId: `reopen-${closureId}` },
-    );
-    logger.info({ storeId, closureId, delay }, 'Scheduled reopen-store job');
-  }
+  private async activateDueClosures(): Promise<void> {
+    const due = await this.prisma.storeClosure.findMany({
+      where: { status: 'SCHEDULED', startDate: { lte: new Date() } },
+      include: { store: true },
+    });
 
-  private async processJob(job: Job<ClosureJobData>): Promise<void> {
-    const { storeId, closureId, correlationId } = job.data;
-    const isClose   = job.name === 'close-store';
-    const newStatus = isClose ? 'TEMPORARILY_CLOSED' : 'OPEN';
+    for (const closure of due) {
+      if (closure.store.status === 'TEMPORARILY_CLOSED') {
+        await this.prisma.storeClosure.update({
+          where: { id: closure.id },
+          data: { status: 'ACTIVE' },
+        });
+        continue;
+      }
 
-    const store = await this.prisma.store.findUnique({ where: { id: storeId } });
-    if (!store) {
-      logger.warn({ storeId, jobName: job.name }, 'Store not found — skipping job');
-      return;
-    }
+      const correlationId = randomUUID();
+      const now = new Date().toISOString();
 
-    if (store.status === newStatus) {
-      logger.info({ storeId, status: newStatus }, 'Store already in target status — skipping');
-      return;
-    }
-
-    const now = new Date().toISOString();
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.store.update({ where: { id: storeId }, data: { status: newStatus } });
-
-      await tx.outboxEvent.create({
-        data: {
-          aggregateId:    storeId,
-          aggregateType:  'Store',
-          eventType:      'StoreStatusChanged',
-          eventVersion:   1,
-          idempotencyKey: randomUUID(),
-          payload: {
-            eventType:    'StoreStatusChanged',
-            eventVersion: 1,
-            correlationId,
-            occurredAt:   now,
+      await this.prisma.$transaction(async (tx) => {
+        await tx.storeClosure.update({ where: { id: closure.id }, data: { status: 'ACTIVE' } });
+        await tx.store.update({ where: { id: closure.storeId }, data: { status: 'TEMPORARILY_CLOSED' } });
+        await tx.outboxEvent.create({
+          data: {
+            aggregateId:    closure.storeId,
+            aggregateType:  'Store',
+            eventType:      'StoreStatusChanged',
+            eventVersion:   1,
+            idempotencyKey: randomUUID(),
             payload: {
-              storeId,
-              previousStatus: store.status,
-              newStatus,
-              reason: isClose
-                ? 'Cierre temporal programado'
-                : 'Reapertura tras cierre temporal',
+              eventType:    'StoreStatusChanged',
+              eventVersion: 1,
+              correlationId,
+              occurredAt:   now,
+              payload: {
+                storeId:        closure.storeId,
+                previousStatus: closure.store.status,
+                newStatus:      'TEMPORARILY_CLOSED',
+                reason:         'Cierre temporal programado',
+              },
             },
+            status:     'PENDING',
+            retryCount: 0,
           },
-          status:     'PENDING',
-          retryCount: 0,
-        },
+        });
       });
 
-      // On reopen: mark the closure as EXPIRED and publish StoreClosureExpired
-      if (!isClose) {
-        await tx.storeClosure.updateMany({
-          where: { id: closureId, status: { in: ['SCHEDULED', 'ACTIVE'] } },
-          data:  { status: 'EXPIRED', processedAt: new Date() },
+      logger.info({ storeId: closure.storeId, closureId: closure.id }, 'Store set to TEMPORARILY_CLOSED');
+    }
+  }
+
+  private async expireDueClosures(): Promise<void> {
+    const due = await this.prisma.storeClosure.findMany({
+      where: { status: 'ACTIVE', endDate: { lte: new Date() } },
+      include: { store: true },
+    });
+
+    for (const closure of due) {
+      const correlationId = randomUUID();
+      const now = new Date().toISOString();
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.storeClosure.update({
+          where: { id: closure.id },
+          data: { status: 'EXPIRED', processedAt: new Date() },
+        });
+        await tx.store.update({ where: { id: closure.storeId }, data: { status: 'OPEN' } });
+
+        await tx.outboxEvent.create({
+          data: {
+            aggregateId:    closure.storeId,
+            aggregateType:  'Store',
+            eventType:      'StoreStatusChanged',
+            eventVersion:   1,
+            idempotencyKey: randomUUID(),
+            payload: {
+              eventType:    'StoreStatusChanged',
+              eventVersion: 1,
+              correlationId,
+              occurredAt:   now,
+              payload: {
+                storeId:        closure.storeId,
+                previousStatus: 'TEMPORARILY_CLOSED',
+                newStatus:      'OPEN',
+                reason:         'Reapertura tras cierre temporal',
+              },
+            },
+            status:     'PENDING',
+            retryCount: 0,
+          },
         });
 
         await tx.outboxEvent.create({
           data: {
-            aggregateId:    storeId,
+            aggregateId:    closure.storeId,
             aggregateType:  'Store',
             eventType:      'StoreClosureExpired',
             eventVersion:   1,
@@ -150,15 +134,15 @@ export class ClosureSchedulerService implements OnApplicationBootstrap, OnApplic
               source:       'identity-admin-service',
               correlationId,
               occurredAt:   now,
-              payload: { storeId, closureId },
+              payload: { storeId: closure.storeId, closureId: closure.id },
             },
             status:     'PENDING',
             retryCount: 0,
           },
         });
-      }
-    });
+      });
 
-    logger.info({ storeId, newStatus, jobName: job.name }, 'Store status updated by closure job');
+      logger.info({ storeId: closure.storeId, closureId: closure.id }, 'Closure expired — store set to OPEN');
+    }
   }
 }

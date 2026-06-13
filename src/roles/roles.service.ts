@@ -106,9 +106,18 @@ export class RolesService {
     });
   }
 
+  async getRolePermissions(roleId: string) {
+    const role = await this.prisma.role.findUnique({
+      where: { id: roleId },
+      include: { rolePermissions: { include: { permission: { select: { id: true, resource: true, action: true } } } } },
+    });
+    if (!role) throw new NotFoundException('Rol no encontrado');
+    return role.rolePermissions.map((rp) => rp.permission);
+  }
+
   async listRoles() {
     return this.prisma.role.findMany({
-      select: { id: true, name: true, systemRole: true, description: true },
+      select: { id: true, name: true, systemRole: true, isSystem: true, description: true },
       orderBy: { name: 'asc' },
     });
   }
