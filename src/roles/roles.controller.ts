@@ -133,6 +133,15 @@ export class RolesController {
     return this.rolesService.setRolePermissions(roleId, permissionIds ?? [], actor.userId, actor.correlationId);
   }
 
+  @Get('roles/:roleId/permissions')
+  @RequirePermission('role:read')
+  @ApiOperation({ summary: 'Obtener permisos actuales de un rol' })
+  @ApiParam({ name: 'roleId', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Permisos del rol' })
+  getRolePermissions(@Param('roleId') roleId: string) {
+    return this.rolesService.getRolePermissions(roleId);
+  }
+
   @Get('roles')
   @RequirePermission('role:read')
   @ApiOperation({

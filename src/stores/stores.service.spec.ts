@@ -16,13 +16,8 @@ const mockPrisma = {
   $transaction:  jest.fn(),
 };
 
-const mockScheduler = {
-  scheduleClose:  jest.fn(),
-  scheduleReopen: jest.fn(),
-};
-
 function makeService() {
-  return new StoresService(mockPrisma as never, mockScheduler as never);
+  return new StoresService(mockPrisma as never);
 }
 
 const OWNER_ID = 'owner-uuid';
@@ -239,7 +234,7 @@ describe('StoresService', () => {
     ).rejects.toThrow(ConflictException);
   });
 
-  it('creates closure, audit log, and schedules both BullMQ jobs', async () => {
+  it('creates closure and audit log', async () => {
     const service = makeService();
     const start = future(1);
     const end   = future(2);
@@ -249,15 +244,11 @@ describe('StoresService', () => {
     mockPrisma.storeClosure.findFirst.mockResolvedValue(null);
     mockPrisma.storeClosure.create.mockResolvedValue(fakeClosure);
     mockPrisma.auditLog.create.mockResolvedValue({});
-    mockScheduler.scheduleClose.mockResolvedValue(undefined);
-    mockScheduler.scheduleReopen.mockResolvedValue(undefined);
 
     const result = await service.createClosure(STORE_ID, { startDate: start, endDate: end }, OWNER_ID, CORR_ID);
 
     expect(mockPrisma.storeClosure.create).toHaveBeenCalled();
     expect(mockPrisma.auditLog.create).toHaveBeenCalled();
-    expect(mockScheduler.scheduleClose).toHaveBeenCalledWith(STORE_ID, start, fakeClosure.id);
-    expect(mockScheduler.scheduleReopen).toHaveBeenCalledWith(STORE_ID, end, fakeClosure.id);
     expect(result.id).toBe('closure-1');
   });
 

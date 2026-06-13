@@ -9,7 +9,6 @@ import {
 import { AuditAction, ClosureStatus, StoreStatus, StoreType } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { ClosureSchedulerService } from './closure-scheduler.service';
 import type { CreateStoreDto } from './dto/create-store.dto';
 import type { UpdateStoreDto } from './dto/update-store.dto';
 import type { UpdateStoreStatusDto } from './dto/update-store-status.dto';
@@ -20,10 +19,7 @@ import type { AssignStaffDto } from './dto/assign-staff.dto';
 
 @Injectable()
 export class StoresService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly scheduler: ClosureSchedulerService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async createStore(ownerId: string, dto: CreateStoreDto, correlationId: string) {
     const store = await this.prisma.$transaction(async (tx) => {
@@ -326,9 +322,6 @@ export class StoresService {
 
       return c;
     });
-
-    await this.scheduler.scheduleClose(storeId, closure.startDate, closure.id);
-    await this.scheduler.scheduleReopen(storeId, closure.endDate, closure.id);
 
     return closure;
   }
