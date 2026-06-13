@@ -54,8 +54,8 @@ describe('ClosureSchedulerService — poll', () => {
       );
       const outboxCall = mockPrisma.outboxEvent.create.mock.calls[0][0].data;
       expect(outboxCall.eventType).toBe('StoreStatusChanged');
-      expect(outboxCall.payload.payload.newStatus).toBe('TEMPORARILY_CLOSED');
-      expect(outboxCall.payload.payload.previousStatus).toBe('OPEN');
+      expect(outboxCall.payload.newStatus).toBe('TEMPORARILY_CLOSED');
+      expect(outboxCall.payload.previousStatus).toBe('OPEN');
     });
   });
 
