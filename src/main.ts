@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
@@ -43,11 +44,8 @@ function openSwaggerIfBrowserOpen(url: string): void {
       const { timestamp } = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf-8')) as {
         timestamp: number;
       };
-      if (Date.now() - timestamp < HOT_RELOAD_WINDOW_MS) {
-        return;
-      }
+      if (Date.now() - timestamp < HOT_RELOAD_WINDOW_MS) return;
     } catch {
-      // lock file corrupted or old format — proceed
     }
   }
 
@@ -58,36 +56,59 @@ function openSwaggerIfBrowserOpen(url: string): void {
 }
 
 function cleanupLock(): void {
-  try {
-    fs.unlinkSync(LOCK_FILE);
-  } catch {
-    // ignore
-  }
+  try { fs.unlinkSync(LOCK_FILE); } catch { }
 }
 
-process.on('SIGTERM', () => {
-  cleanupLock();
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  cleanupLock();
-  process.exit(0);
-});
+process.on('SIGTERM', () => { cleanupLock(); process.exit(0); });
+process.on('SIGINT',  () => { cleanupLock(); process.exit(0); });
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  app.enableCors({
+    origin: ['http://localhost:5173', 'http://localhost:4173'],
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Correlation-Id'],
+    exposedHeaders: ['X-Correlation-Id'],
+    credentials: true,
+  });
+
   const config = new DocumentBuilder()
-    .setTitle('Identity Service')
-    .setDescription('Identity Service API documentation')
+    .setTitle('Identity & Administration Service')
+    .setDescription(
+      `Microservicio de identidad y administración de la plataforma **ECIxpress**.\n\n` +
+      `## Autenticación\n` +
+      `Todos los endpoints protegidos requieren un **Firebase ID Token** en el header:\n` +
+      "`Authorization: Bearer <idToken>`\n\n" +
+      `El token se obtiene autenticándose con Firebase Auth (email/password o Google).\n\n` +
+      `## Roles del sistema\n` +
+      `| Rol | Descripción |\n` +
+      `|-----|-------------|\n` +
+      `| BUYER | Comprador — rol por defecto al registrarse |\n` +
+      `| VENDOR | Vendedor — operador de puntos de venta |\n` +
+      `| ADMIN | Administrador — acceso total |\n` +
+      `| ANALYST | Analista — solo lectura |\n\n` +
+      `## Exportar especificación\n` +
+      `- JSON: \`GET /api-json\`\n` +
+      `- YAML: \`GET /api-yaml\``
+    )
     .setVersion('1.0')
+    .addBearerAuth(
+      { type: 'http', scheme: 'bearer', bearerFormat: 'Firebase ID Token' },
+      'bearer',
+    )
+    .addTag('Auth',   'Autenticación, sincronización de perfil y validación de tokens')
+    .addTag('Users',  'Gestión de perfiles de usuario')
+    .addTag('Roles',  'Asignación y revocación de roles a usuarios')
+    .addTag('Stores', 'Puntos de venta, horarios regulares y cierres temporales')
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api', app, document);
+  SwaggerModule.setup('api', app, document, {
+    swaggerOptions: { persistAuthorization: true },
+  });
 
-  const port = process.env.PORT ?? 3000;
+  const port = process.env.PORT ?? 3001;
   await app.listen(port);
 
   openSwaggerIfBrowserOpen(`http://localhost:${port}/api`);
