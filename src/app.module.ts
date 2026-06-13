@@ -13,6 +13,8 @@ import { FirebaseAuthGuard } from './common/guards/firebase-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { CorrelationIdInterceptor } from './common/interceptors/correlation-id.interceptor';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 
 @Module({
   imports: [
@@ -26,7 +28,9 @@ import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
     AuditModule,
     InternalModule,
   ],
+  controllers: [AppController],
   providers: [
+    AppService,
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
     { provide: APP_INTERCEPTOR, useClass: CorrelationIdInterceptor },
     { provide: APP_GUARD, useClass: FirebaseAuthGuard },
