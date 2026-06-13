@@ -24,3 +24,5 @@ pnpm-debug.log*
 Thumbs.db
 pnpm-workspace.yaml
 pnpm-workspace.yaml
+
+CLAUDE.md
