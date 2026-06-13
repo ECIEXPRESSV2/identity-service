@@ -80,7 +80,7 @@ export class RolesService {
           payload: {
             eventType: 'RoleUpdated', eventVersion: 1, correlationId,
             occurredAt: new Date().toISOString(),
-            payload: { roleId, permissionIds, performedBy: actorId },
+            roleId, permissionIds, performedBy: actorId,
           },
           status: 'PENDING', retryCount: 0,
         },
@@ -154,7 +154,7 @@ export class RolesService {
           payload: {
             eventType: 'UserRoleChanged', eventVersion: 1, correlationId,
             occurredAt: new Date().toISOString(),
-            payload: { userId, roleId, roleName: role.name, action: 'assigned', performedBy: actorId },
+            userId, roleId, roleName: role.name, action: 'assigned', performedBy: actorId,
           },
           status: 'PENDING', retryCount: 0,
         },
@@ -216,7 +216,7 @@ export class RolesService {
           payload: {
             eventType: 'UserRoleChanged', eventVersion: 1, correlationId,
             occurredAt: new Date().toISOString(),
-            payload: { userId, roleId, roleName: role.name, action: 'revoked', performedBy: actorId },
+            userId, roleId, roleName: role.name, action: 'revoked', performedBy: actorId,
           },
           status: 'PENDING', retryCount: 0,
         },
