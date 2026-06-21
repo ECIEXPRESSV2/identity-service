@@ -65,8 +65,14 @@ process.on('SIGINT',  () => { cleanupLock(); process.exit(0); });
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  const defaultOrigins = ['http://localhost:5173', 'http://localhost:4173'];
+  const envOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
+    : [];
+  const allowedOrigins = [...new Set([...defaultOrigins, ...envOrigins])];
+
   app.enableCors({
-    origin: ['http://localhost:5173', 'http://localhost:4173'],
+    origin: allowedOrigins,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Correlation-Id'],
     exposedHeaders: ['X-Correlation-Id'],
