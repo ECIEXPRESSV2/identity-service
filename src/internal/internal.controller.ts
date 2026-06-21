@@ -37,6 +37,37 @@ export class InternalController {
     return this.internalService.validateUser(userId);
   }
 
+  @Get('stores/:storeId/staff')
+  @Public()
+  @ApiOperation({
+    summary: '[Interno] Obtener staff de una tienda',
+    description:
+      'Endpoint para uso interno entre microservicios (Order, Notification). ' +
+      'Retorna los usuarios activos asignados como staff de la tienda, ' +
+      'para que Order pueda identificar el vendorId real del chat.',
+  })
+  @ApiParam({ name: 'storeId', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de staff activo de la tienda',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          userId:   { type: 'string', format: 'uuid' },
+          fullName: { type: 'string' },
+          email:    { type: 'string' },
+          role:     { type: 'string', example: 'VENDOR' },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
+  getStoreStaff(@Param('storeId') storeId: string) {
+    return this.internalService.getStoreStaff(storeId);
+  }
+
   @Get('stores/:storeId/availability')
   @Public()
   @ApiOperation({
