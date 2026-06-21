@@ -63,21 +63,7 @@ process.on('SIGTERM', () => { cleanupLock(); process.exit(0); });
 process.on('SIGINT',  () => { cleanupLock(); process.exit(0); });
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-
-  const defaultOrigins = ['http://localhost:5173', 'http://localhost:4173'];
-  const envOrigins = process.env.CORS_ORIGINS
-    ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
-    : [];
-  const allowedOrigins = [...new Set([...defaultOrigins, ...envOrigins])];
-
-  app.enableCors({
-    origin: allowedOrigins,
-    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Correlation-Id'],
-    exposedHeaders: ['X-Correlation-Id'],
-    credentials: true,
-  });
+  const app = await NestFactory.create(AppModule, { cors: true });
 
   const config = new DocumentBuilder()
     .setTitle('Identity & Administration Service')
