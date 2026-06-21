@@ -63,6 +63,23 @@ export class InternalService {
     return { available: true, reason: null };
   }
 
+  async getStoreStaff(storeId: string) {
+    const store = await this.prisma.store.findUnique({ where: { id: storeId } });
+    if (!store) throw new NotFoundException('Tienda no encontrada');
+
+    const staff = await this.prisma.storeStaff.findMany({
+      where:   { storeId, isActive: true },
+      include: { user: { select: { id: true, email: true, fullName: true } } },
+    });
+
+    return staff.map((s) => ({
+      userId:   s.userId,
+      fullName: s.user.fullName,
+      email:    s.user.email,
+      role:     'VENDOR',
+    }));
+  }
+
   private resolveEffectiveRole(roles: string[]): string | null {
     if (roles.includes('ADMIN'))  return 'ADMIN';
     if (roles.includes('VENDOR')) return 'VENDOR';
