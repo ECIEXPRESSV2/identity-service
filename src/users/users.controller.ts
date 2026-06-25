@@ -17,6 +17,8 @@ import { UpdateProfileSchema, type UpdateProfileDto } from './dto/update-profile
 import { UpdateStatusSchema, type UpdateStatusDto } from './dto/update-status.dto';
 import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
 import { UserStatus } from '@prisma/client';
+import { SessionService } from '../common/services/session.service';
+import { SkipSessionValidation } from '../common/decorators/skip-session.decorator';
 
 const USER_SCHEMA = {
   type: 'object',
@@ -50,16 +52,22 @@ const USER_SCHEMA = {
 @ApiBearerAuth()
 @Controller()
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly sessionService: SessionService,
+  ) {}
 
   @Post('auth/sync-profile')
+  @SkipSessionValidation()
   @ApiOperation({
     summary: 'Registrar o sincronizar perfil de usuario',
     description:
       'Crea el perfil local en PostgreSQL vinculado al Firebase UID del token. ' +
       'Si el perfil ya existe es idempotente: retorna el perfil existente sin crear duplicados. ' +
       'Debe llamarse en el primer login exitoso desde el cliente. ' +
-      'Asigna el rol **BUYER** por defecto y publica el evento `UserRegistered` al bus.',
+      'Asigna el rol **BUYER** por defecto y publica el evento `UserRegistered` al bus. ' +
+      'Retorna un `sessionId` que el cliente debe guardar en `sessionStorage` y enviar ' +
+      'como header `X-Session-Id` en todas las peticiones posteriores.',
   })
   @ApiBody({
     schema: {
@@ -71,8 +79,14 @@ export class UsersController {
       },
     },
   })
-  @ApiResponse({ status: 201, description: 'Perfil creado exitosamente', schema: USER_SCHEMA })
-  @ApiResponse({ status: 200, description: 'Perfil ya existente — retornado sin cambios', schema: USER_SCHEMA })
+  @ApiResponse({
+    status: 201,
+    description: 'Perfil creado exitosamente',
+    schema: {
+      allOf: [{ type: 'object', properties: { sessionId: { type: 'string', format: 'uuid' } } }],
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Perfil ya existente — retornado sin cambios' })
   @ApiResponse({ status: 400, description: 'Validación fallida — fullName es obligatorio' })
   @ApiResponse({ status: 401, description: 'Token de Firebase ausente, expirado o inválido' })
   async syncProfile(
@@ -86,8 +100,9 @@ export class UsersController {
       dto,
       user.correlationId,
     );
+    const sessionId = await this.sessionService.createSession(profile.id);
     res.status(created ? HttpStatus.CREATED : HttpStatus.OK);
-    return profile;
+    return { ...profile, sessionId };
   }
 
   @Get('users')

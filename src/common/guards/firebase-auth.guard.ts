@@ -9,7 +9,9 @@ import { randomUUID } from 'node:crypto';
 import type { Request } from 'express';
 import { admin, initFirebase } from '../../config/firebase.config';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SessionService } from '../services/session.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { SKIP_SESSION_KEY } from '../decorators/skip-session.decorator';
 
 export interface AuthenticatedUser {
   userId: string;
@@ -30,6 +32,7 @@ export class FirebaseAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly prisma: PrismaService,
+    private readonly sessionService: SessionService,
   ) {
     initFirebase();
   }
@@ -45,10 +48,19 @@ export class FirebaseAuthGuard implements CanActivate {
     req.correlationId =
       (req.headers['x-correlation-id'] as string | undefined) ?? randomUUID();
 
-    if (!isPublic) {
-      const token = this.extractToken(req);
-      const { uid, email } = await this.verifyToken(token);
-      req.user = await this.loadUser(uid, email, req.correlationId);
+    if (isPublic) return true;
+
+    const skipSession = this.reflector.getAllAndOverride<boolean>(SKIP_SESSION_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    const token = this.extractToken(req);
+    const { uid, email } = await this.verifyToken(token);
+    req.user = await this.loadUser(uid, email, req.correlationId);
+
+    if (!skipSession && req.user.userId) {
+      await this.validateSession(req);
     }
 
     return true;
@@ -103,9 +115,6 @@ export class FirebaseAuthGuard implements CanActivate {
       },
     });
 
-    // Usuario verificado por Firebase pero sin perfil local todavía.
-    // Solo sync-profile necesita este estado; los demás endpoints
-    // fallarán por falta de userId o permisos, que es el comportamiento correcto.
     if (!dbUser) {
       return { userId: '', firebaseUid, email, roles: [], permissions: [], correlationId };
     }
@@ -125,5 +134,18 @@ export class FirebaseAuthGuard implements CanActivate {
       permissions,
       correlationId,
     };
+  }
+
+  private async validateSession(req: RequestWithUser): Promise<void> {
+    const sessionId = req.headers['x-session-id'] as string | undefined;
+
+    if (!sessionId) {
+      throw new UnauthorizedException('Sesión no iniciada — ejecuta sync-profile');
+    }
+
+    const valid = await this.sessionService.validateSession(req.user.userId, sessionId);
+    if (!valid) {
+      throw new UnauthorizedException('Sesión inválida o expirada');
+    }
   }
 }
