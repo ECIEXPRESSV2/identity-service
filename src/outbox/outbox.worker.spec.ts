@@ -84,7 +84,7 @@ describe('OutboxWorker.processOutbox', () => {
       'identity.user.registered',
       expect.objectContaining({
         ...event.payload,
-        source:         'identity-admin-service',
+        source:         'identity-service',
         idempotencyKey: event.idempotencyKey,
       }),
     );
