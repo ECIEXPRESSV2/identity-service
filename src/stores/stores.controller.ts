@@ -166,6 +166,20 @@ export class StoresController {
     return this.storesService.getMyStores(user.userId);
   }
 
+  @Get('user/:userId')
+  @RequirePermission('store:read')
+  @ApiOperation({
+    summary: 'Tiendas de un usuario específico (admin)',
+    description: 'Retorna las tiendas donde el usuario dado es dueño o staff activo. Requiere permiso `store:read`.',
+  })
+  @ApiParam({ name: 'userId', description: 'UUID del usuario', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Tiendas del usuario', schema: { type: 'array', items: STORE_SCHEMA } })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `store:read` requerido' })
+  getStoresByUser(@Param('userId') userId: string) {
+    return this.storesService.getStoresByUser(userId);
+  }
+
   @Get(':id')
   @Public()
   @ApiOperation({

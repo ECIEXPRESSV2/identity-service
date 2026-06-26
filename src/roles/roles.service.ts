@@ -237,6 +237,16 @@ export class RolesService {
     return this.buildResponse(userId);
   }
 
+  async bulkAssignRole(userIds: string[], roleId: string, actorId: string, correlationId: string) {
+    const role = await this.prisma.role.findUnique({ where: { id: roleId } });
+    if (!role) throw new NotFoundException('Rol no encontrado');
+
+    const results = await Promise.all(
+      userIds.map((userId) => this.assignRole(userId, roleId, actorId, correlationId)),
+    );
+    return { updated: results.length, roleId, roleName: role.name };
+  }
+
   private async buildResponse(userId: string) {
     const userRoles = await this.prisma.userRole.findMany({
       where: { userId },

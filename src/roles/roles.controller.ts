@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -174,6 +174,39 @@ export class RolesController {
   @ApiResponse({ status: 403, description: 'Permiso `role:read` requerido' })
   listRoles() {
     return this.rolesService.listRoles();
+  }
+
+  @Post('users/bulk/roles')
+  @RequirePermission('role:assign')
+  @ApiOperation({
+    summary: 'Asignar rol a múltiples usuarios',
+    description: 'Asigna un rol a varios usuarios en una sola operación. Es idempotente. Requiere permiso `role:assign`.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['userIds', 'roleId'],
+      properties: {
+        userIds: { type: 'array', items: { type: 'string', format: 'uuid' }, minItems: 1 },
+        roleId:  { type: 'string', format: 'uuid' },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Rol asignado a todos los usuarios indicados' })
+  @ApiResponse({ status: 400, description: 'userIds vacío o roleId inválido' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `role:assign` requerido' })
+  @ApiResponse({ status: 404, description: 'Rol no encontrado' })
+  async bulkAssignRole(
+    @Body('userIds') userIds: string[],
+    @Body('roleId')  roleId: string,
+    @CurrentUser()   actor: AuthenticatedUser,
+  ) {
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      throw new BadRequestException('userIds debe ser un array no vacío');
+    }
+    if (!roleId) throw new BadRequestException('roleId es requerido');
+    return this.rolesService.bulkAssignRole(userIds, roleId, actor.userId, actor.correlationId);
   }
 
   @Post('users/:id/roles')

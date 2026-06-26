@@ -367,6 +367,20 @@ export class StoresService {
     return stores.map((s) => ({ ...this.formatStore(s), schedules: s.schedules }));
   }
 
+  async getStoresByUser(userId: string) {
+    const stores = await this.prisma.store.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { ownerId: userId },
+          { staff: { some: { userId, isActive: true } } },
+        ],
+      },
+      orderBy: { name: 'asc' },
+    });
+    return stores.map(this.formatStore);
+  }
+
   // ─── Schedule update / delete ────────────────────────────────────────────────
 
   async updateSchedule(
