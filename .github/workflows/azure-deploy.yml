@@ -1,0 +1,74 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# Despliegue a Azure Container Apps — eciexpress-prod-identity
+#
+# ⚠️  INERTE A PROPÓSITO. No existe aún la infra (ACR/Container App) y se quieren
+#     ahorrar créditos. Por eso:
+#       - Disparador SOLO manual (workflow_dispatch), que nadie va a lanzar.
+#       - El job de deploy está protegido con `if: false`.
+#     El YAML está completo y correcto: encenderlo es cambiar una línea.
+#
+# NO reemplaza al pipeline de Render (deploy.yml), que se deja intacto.
+#
+# CÓMO ENCENDERLO cuando la infra exista:
+#   1. Aplicar la infra (carpeta infra/) y tener el ACR + Container App creados.
+#   2. Cargar los GitHub Secrets del repo (ver README de infra §Bootstrap):
+#        AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, ACR_NAME
+#   3. En el job `deploy`, cambiar `if: false` por la condición real
+#      (p.ej. if: github.ref == 'refs/heads/main') y, si se quiere CI automático,
+#      descomentar el trigger `push`.
+# ═════════════════════════════════════════════════════════════════════════════
+name: azure-deploy
+
+on:
+  workflow_dispatch: {} # solo manual; inerte por ahora
+  # TODO(activar): descomentar para build+deploy automático al hacer push.
+  # push:
+  #   branches: [main]
+
+permissions:
+  contents: read
+  id-token: write # login OIDC al Service Principal, sin secretos de larga vida
+
+env:
+  IMAGE_NAME: identity-service
+  CONTAINER_APP: eciexpress-prod-identity
+  RESOURCE_GROUP: eciexpress-prod-rg
+
+jobs:
+  deploy:
+    name: build (ACR) -> update Container App
+    runs-on: ubuntu-latest
+    # ── INERTE: no corre hasta quitar esta línea. ──
+    if: false # TODO(activar): cambiar por github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Build + push en el propio ACR (server-side): no requiere docker local.
+      - name: Build & push image to ACR
+        run: |
+          az acr build \
+            --registry "${{ secrets.ACR_NAME }}" \
+            --image "${IMAGE_NAME}:${{ github.sha }}" \
+            --image "${IMAGE_NAME}:latest" \
+            .
+
+      # TODO(migraciones): este servicio necesita correr migraciones antes/junto al
+      # deploy (INVENTARIO §8). identity = `prisma migrate deploy`; el resto =
+      # `migration:run` (TypeORM). Decidir mecanismo (job/exec). reporting NO tiene DB.
+      # - name: Run DB migrations
+      #   run: echo "TODO: ejecutar migraciones"
+
+      - name: Update Container App image
+        run: |
+          az containerapp update \
+            --name "${CONTAINER_APP}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --image "${{ secrets.ACR_NAME }}.azurecr.io/${IMAGE_NAME}:${{ github.sha }}"
