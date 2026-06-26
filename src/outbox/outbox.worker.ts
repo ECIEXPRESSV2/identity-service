@@ -82,9 +82,16 @@ export class OutboxWorker implements OnApplicationBootstrap, OnApplicationShutdo
   private async publishEvent(event: OutboxEvent): Promise<void> {
     const routingKey = toRoutingKey(event.aggregateType, event.eventType);
 
+    // Sobre estándar del bus: campos de negocio planos + metadata. El tipo de evento
+    // se identifica por la routing key, así que `eventType` no se duplica en el cuerpo
+    // (se elimina aquí, en el ensamblador del envelope, aunque la fila de outbox lo
+    // conserve en su columna para derivar la routing key).
+    const body = { ...(event.payload as Record<string, unknown>) };
+    delete body.eventType;
+
     const envelope = {
-      ...(event.payload as object),
-      source:        'identity-admin-service',
+      ...body,
+      source:         'identity-service',
       idempotencyKey: event.idempotencyKey,
     };
 
