@@ -158,6 +158,25 @@ describe('UsersService', () => {
         service.updateProfile('no-existe', { fullName: 'Test' }, correlationId),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it('actualiza solo el numero de celular del usuario', async () => {
+      prisma.user.findUnique.mockResolvedValue(dbUser);
+      prisma.$transaction.mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+      prisma.user.update.mockResolvedValue({ ...dbUser, phone: '+573001112233' });
+      prisma.outboxEvent.create.mockResolvedValue({});
+      prisma.auditLog.create.mockResolvedValue({});
+
+      const result = await service.updatePhone(
+        'user-123', '+573001112233', correlationId,
+      );
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { phone: '+573001112233' },
+        }),
+      );
+      expect(result.phone).toBe('+573001112233');
+    });
   });
 
 

@@ -226,6 +226,10 @@ export class UsersService {
     return this.formatUser(updated);
   }
 
+  async updatePhone(userId: string, phone: string, correlationId: string) {
+    return this.updateProfile(userId, { phone }, correlationId);
+  }
+
 
   async updateStatus(
     targetId: string,

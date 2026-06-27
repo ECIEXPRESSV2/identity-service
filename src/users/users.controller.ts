@@ -13,6 +13,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
 import { SyncProfileSchema, type SyncProfileDto } from './dto/sync-profile.dto';
+import { UpdatePhoneSchema, type UpdatePhoneDto } from './dto/update-phone.dto';
 import { UpdateProfileSchema, type UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdateStatusSchema, type UpdateStatusDto } from './dto/update-status.dto';
 import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
@@ -185,6 +186,38 @@ export class UsersController {
     @Body(new ZodValidationPipe(UpdateProfileSchema)) dto: UpdateProfileDto,
   ) {
     return this.usersService.updateProfile(user.userId, dto, user.correlationId);
+  }
+
+  @Patch('users/me/phone')
+  @ApiOperation({
+    summary: 'Actualizar celular propio',
+    description:
+      'Actualiza unicamente el numero de celular del usuario autenticado. ' +
+      'Publica el evento `UserProfileUpdated` con el campo `phone` modificado.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['phone'],
+      properties: {
+        phone: {
+          type: 'string',
+          minLength: 7,
+          maxLength: 20,
+          example: '+57 300 123 4567',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Celular actualizado', schema: USER_SCHEMA })
+  @ApiResponse({ status: 400, description: 'Validacion fallida' })
+  @ApiResponse({ status: 401, description: 'Token invalido' })
+  @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
+  updateMyPhone(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(new ZodValidationPipe(UpdatePhoneSchema)) dto: UpdatePhoneDto,
+  ) {
+    return this.usersService.updatePhone(user.userId, dto.phone, user.correlationId);
   }
 
   @Get('users/:id')
