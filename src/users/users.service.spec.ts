@@ -18,7 +18,7 @@ const dbUser = {
   userRoles: [{ role: buyerRole }],
 };
 
-const syncDto = { fullName: 'Ana García', phone: undefined };
+const syncDto = { fullName: 'Ana García', phone: '+573001234567' };
 const correlationId = 'corr-uuid-001';
 
 function buildPrismaMock() {
@@ -60,6 +60,7 @@ describe('UsersService', () => {
   describe('syncProfile', () => {
     it('retorna el perfil existente sin crear nada (idempotente)', async () => {
       prisma.user.findUnique.mockResolvedValue(dbUser);
+      prisma.user.update.mockResolvedValue(dbUser);
 
       const result = await service.syncProfile(
         dbUser.firebaseUid, dbUser.email, syncDto, correlationId,
