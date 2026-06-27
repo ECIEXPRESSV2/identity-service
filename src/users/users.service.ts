@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
@@ -18,9 +19,10 @@ export class UsersService {
 
 
   async listUsers(filters: {
-    search?:  string;
-    status?:  UserStatus;
-    role?:    string;
+    search?:   string;
+    status?:   UserStatus;
+    role?:     string;
+    sortBy?:   'createdAt' | 'lastLoginAt';
   }, page: number, limit: number) {
     const where: Prisma.UserWhereInput = {};
 
@@ -35,13 +37,18 @@ export class UsersService {
       where.userRoles = { some: { role: { name: { equals: filters.role, mode: 'insensitive' } } } };
     }
 
+    const orderBy: Prisma.UserOrderByWithRelationInput[] =
+      filters.sortBy === 'lastLoginAt'
+        ? [{ lastLoginAt: 'desc' }, { createdAt: 'desc' }]
+        : [{ createdAt: 'desc' }];
+
     const skip = (page - 1) * limit;
     const [total, users] = await Promise.all([
       this.prisma.user.count({ where }),
       this.prisma.user.findMany({
         where,
         include: { userRoles: { include: { role: true } } },
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         skip,
         take: limit,
       }),
@@ -59,11 +66,27 @@ export class UsersService {
     dto: SyncProfileDto,
     correlationId: string,
   ) {
+    if (!dto.phone) {
+      // phone es obligatorio solo para usuarios nuevos; se valida aquí
+      // porque el DTO lo mantiene opcional para re-sincronizaciones de usuarios existentes
+      const alreadyExists = await this.prisma.user.findUnique({ where: { firebaseUid }, select: { id: true } });
+      if (!alreadyExists) {
+        throw new BadRequestException('El número de teléfono es obligatorio para el registro');
+      }
+    }
+
     const existing = await this.prisma.user.findUnique({
       where: { firebaseUid },
       include: { userRoles: { include: { role: true } } },
     });
-    if (existing) return { created: false, ...this.formatUser(existing) };
+    if (existing) {
+      const updated = await this.prisma.user.update({
+        where: { id: existing.id },
+        data: { lastLoginAt: new Date() },
+        include: { userRoles: { include: { role: true } } },
+      });
+      return { created: false, ...this.formatUser(updated) };
+    }
 
     const buyerRole = await this.prisma.role.findFirst({
       where: { systemRole: 'BUYER' },
@@ -266,6 +289,21 @@ export class UsersService {
   }
 
 
+  async bulkUpdateStatus(
+    userIds: string[],
+    status: UserStatus,
+    actorId: string,
+    correlationId: string,
+  ) {
+    if (status !== UserStatus.ACTIVE && userIds.includes(actorId)) {
+      throw new ForbiddenException('Un administrador no puede cambiar su propio estado');
+    }
+    const results = await Promise.all(
+      userIds.map((id) => this.updateStatus(id, status, actorId, correlationId)),
+    );
+    return { updated: results.length, users: results };
+  }
+
   private formatUser(user: {
     id: string;
     firebaseUid: string;
@@ -274,6 +312,7 @@ export class UsersService {
     phone?: string | null;
     avatarUrl?: string | null;
     status?: UserStatus;
+    lastLoginAt?: Date | null;
     createdAt?: Date | null;
     userRoles: { role: { name: string } }[];
   }) {
@@ -286,6 +325,7 @@ export class UsersService {
       phone: user.phone ?? null,
       avatarUrl: user.avatarUrl ?? null,
       status: user.status,
+      lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
       createdAt: user.createdAt?.toISOString() ?? null,
       roles: user.userRoles.map((ur) => ur.role.name),
     };

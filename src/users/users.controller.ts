@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpStatus, Param, Patch, Post, Put, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Param, Patch, Post, Put, Query, Res, BadRequestException } from '@nestjs/common';
 import type { Response } from 'express';
 import {
   ApiBearerAuth,
@@ -138,9 +138,10 @@ export class UsersController {
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('role')   role?:   string,
+    @Query('sortBy') sortBy?: string,
   ) {
     return this.usersService.listUsers(
-      { search, status: status as UserStatus | undefined, role },
+      { search, status: status as UserStatus | undefined, role, sortBy: sortBy as 'createdAt' | 'lastLoginAt' | undefined },
       Math.max(1, Number.parseInt(page, 10) || 1),
       Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 20)),
     );
@@ -199,6 +200,46 @@ export class UsersController {
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
   getUser(@Param('id') id: string) {
     return this.usersService.findById(id);
+  }
+
+  @Patch('users/bulk/status')
+  @RequirePermission('user:deactivate')
+  @ApiOperation({
+    summary: 'Cambiar estado de múltiples usuarios',
+    description: 'Actualiza el estado de varios usuarios en una sola operación. Requiere permiso `user:deactivate`.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['userIds', 'status'],
+      properties: {
+        userIds: { type: 'array', items: { type: 'string', format: 'uuid' }, minItems: 1 },
+        status:  { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'SUSPENDED'] },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Estados actualizados' })
+  @ApiResponse({ status: 400, description: 'userIds vacío o status inválido' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Permiso `user:deactivate` requerido' })
+  async bulkUpdateStatus(
+    @Body('userIds') userIds: string[],
+    @Body('status')  status: string,
+    @CurrentUser()   actor: AuthenticatedUser,
+  ) {
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      throw new BadRequestException('userIds debe ser un array no vacío');
+    }
+    const validStatuses = ['ACTIVE', 'INACTIVE', 'SUSPENDED'];
+    if (!validStatuses.includes(status)) {
+      throw new BadRequestException(`status debe ser uno de: ${validStatuses.join(', ')}`);
+    }
+    return this.usersService.bulkUpdateStatus(
+      userIds,
+      status as UserStatus,
+      actor.userId,
+      actor.correlationId,
+    );
   }
 
   @Patch('users/:id/status')
