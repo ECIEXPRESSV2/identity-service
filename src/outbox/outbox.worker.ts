@@ -6,7 +6,7 @@ import {
 import type { OutboxEvent } from '@prisma/client';
 import pino from 'pino';
 import { PrismaService } from '../prisma/prisma.service';
-import { RabbitMQService } from './rabbitmq.service';
+import { ServiceBusPublisherService } from './service-bus-publisher.service';
 
 const logger = pino({ name: 'outbox-worker' });
 
@@ -43,7 +43,7 @@ export class OutboxWorker implements OnApplicationBootstrap, OnApplicationShutdo
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly rabbit: RabbitMQService,
+    private readonly rabbit: ServiceBusPublisherService,
   ) {}
 
   onApplicationBootstrap(): void {
