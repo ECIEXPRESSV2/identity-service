@@ -10,4 +10,8 @@ COPY . .
 RUN pnpm prisma generate && pnpm run build
 
 EXPOSE 3000
-CMD ["node", "dist/main.js"]
+
+# Migraciones al INICIAR (Prisma): el contenedor corre dentro de la VNet y alcanza el
+# Postgres privado. `prisma migrate deploy` es idempotente y seguro para reaplicar.
+# Luego arranca la app.
+CMD ["sh", "-c", "pnpm prisma migrate deploy && node dist/main.js"]
