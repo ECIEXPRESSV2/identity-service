@@ -2,6 +2,8 @@ import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { StructuredLogger } from './common/logger/structured.logger';
+import { setupAppInsights } from './common/telemetry/app-insights';
 import { execSync, exec } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -63,7 +65,14 @@ process.on('SIGTERM', () => { cleanupLock(); process.exit(0); });
 process.on('SIGINT',  () => { cleanupLock(); process.exit(0); });
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { cors: true });
+  // Inicializa Application Insights antes de crear la app para que el SDK pueda
+  // instrumentar HTTP/dependencias. No-op si no hay connection string (local).
+  setupAppInsights();
+
+  const app = await NestFactory.create(AppModule, {
+    cors: true,
+    logger: new StructuredLogger(),
+  });
 
   const config = new DocumentBuilder()
     .setTitle('Identity & Administration Service')

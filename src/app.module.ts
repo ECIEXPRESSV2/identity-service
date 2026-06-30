@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { PrismaModule } from './prisma/prisma.module';
 import { CommonModule } from './common/common.module';
@@ -13,6 +13,7 @@ import { FirebaseAuthGuard } from './common/guards/firebase-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { CorrelationIdInterceptor } from './common/interceptors/correlation-id.interceptor';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
+import { LoggingMiddleware } from './common/logger/logging.middleware';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -37,4 +38,10 @@ import { AppService } from './app.service';
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    // Rellena el userId (header x-user-id) en el contexto de logging para que cada
+    // log enviado a Application Insights incluya customDimensions.userId.
+    consumer.apply(LoggingMiddleware).forRoutes('*');
+  }
+}
