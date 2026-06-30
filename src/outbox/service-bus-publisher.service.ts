@@ -24,23 +24,24 @@ export class ServiceBusPublisherService
   private client: ServiceBusClient | null = null;
   private sender: ServiceBusSender | null = null;
 
+  private readonly connStr =
+    process.env['SERVICE_BUS_CONNECTION_STRING'] ?? '';
   private readonly fqns =
     process.env['SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE'] ?? '';
   private readonly topic =
     process.env['SERVICE_BUS_TOPIC'] ?? 'eciexpress_events';
 
   onApplicationBootstrap(): void {
-    if (!this.fqns) {
+    if (!this.connStr && !this.fqns) {
       logger.warn(
-        'SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE not configured — publishing disabled',
+        'SERVICE_BUS_CONNECTION_STRING / SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE not configured — publishing disabled',
       );
       return;
     }
     try {
-      this.client = new ServiceBusClient(
-        this.fqns,
-        new DefaultAzureCredential(),
-      );
+      this.client = this.connStr
+        ? new ServiceBusClient(this.connStr)
+        : new ServiceBusClient(this.fqns, new DefaultAzureCredential());
       this.sender = this.client.createSender(this.topic);
       logger.info({ topic: this.topic }, 'Service Bus connected');
     } catch (err) {
