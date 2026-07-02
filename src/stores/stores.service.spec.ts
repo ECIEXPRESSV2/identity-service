@@ -18,6 +18,7 @@ const mockPrisma = {
 
 const mockStoreAssets = {
   uploadStoreLogo: jest.fn(),
+  uploadStoreBanner: jest.fn(),
 };
 
 function makeService() {
@@ -150,6 +151,47 @@ describe('StoresService', () => {
       service.uploadLogo(STORE_ID, { buffer: Buffer.from('x'), mimetype: 'image/png' }, 'attacker', false, CORR_ID),
     ).rejects.toThrow(ForbiddenException);
     expect(mockStoreAssets.uploadStoreLogo).not.toHaveBeenCalled();
+  });
+
+  // ── uploadBanner ───────────────────────────────────────────────────────────
+
+  it('uploads banner to blob and logs an audit entry (no DB column, no event)', async () => {
+    const service = makeService();
+    const url = 'https://acct.blob.core.windows.net/store-banners/store-uuid.png';
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockStoreAssets.uploadStoreBanner.mockResolvedValue(url);
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const buffer = Buffer.from('banner');
+    const result = await service.uploadBanner(
+      STORE_ID, { buffer, mimetype: 'image/webp' }, OWNER_ID, false,
+    );
+
+    expect(mockStoreAssets.uploadStoreBanner).toHaveBeenCalledWith(STORE_ID, buffer, 'image/webp');
+    expect(mockPrisma.store.update).not.toHaveBeenCalled();
+    expect(mockPrisma.outboxEvent.create).not.toHaveBeenCalled();
+    expect(mockPrisma.auditLog.create).toHaveBeenCalled();
+    expect(result).toEqual({ storeId: STORE_ID, bannerUrl: url });
+  });
+
+  it('throws BadRequestException for a non-image banner mime type', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+
+    await expect(
+      service.uploadBanner(STORE_ID, { buffer: Buffer.from('x'), mimetype: 'application/pdf' }, OWNER_ID, false),
+    ).rejects.toThrow(BadRequestException);
+    expect(mockStoreAssets.uploadStoreBanner).not.toHaveBeenCalled();
+  });
+
+  it('throws ForbiddenException when non-owner non-admin uploads a banner', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+
+    await expect(
+      service.uploadBanner(STORE_ID, { buffer: Buffer.from('x'), mimetype: 'image/png' }, 'attacker', false),
+    ).rejects.toThrow(ForbiddenException);
+    expect(mockStoreAssets.uploadStoreBanner).not.toHaveBeenCalled();
   });
 
   // ── updateStatus ───────────────────────────────────────────────────────────

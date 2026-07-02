@@ -195,6 +195,36 @@ export class StoresService {
     return this.formatStore(updated);
   }
 
+  async uploadBanner(
+    id: string,
+    file: { buffer: Buffer; mimetype: string },
+    actorId: string,
+    isAdmin: boolean,
+  ) {
+    const store = await this.loadStore(id);
+    this.assertOwnership(store.ownerId, actorId, isAdmin);
+
+    if (!ALLOWED_IMAGE_TYPES.includes(file.mimetype)) {
+      throw new BadRequestException('La imagen debe ser PNG, JPEG o WebP');
+    }
+
+    // El banner se lee por convención (store-banners/<id>.png); no hay columna en BD que actualizar.
+    // Solo se sube al Blob y se deja rastro en auditoría (no emite evento: nada más consume el banner).
+    const bannerUrl = await this.storeAssets.uploadStoreBanner(id, file.buffer, file.mimetype);
+
+    await this.prisma.auditLog.create({
+      data: {
+        actorId,
+        targetId:   id,
+        targetType: 'Store',
+        action:     AuditAction.STORE_UPDATED,
+        newValue:   { bannerUrl } as never,
+      },
+    });
+
+    return { storeId: id, bannerUrl };
+  }
+
   async updateStatus(
     id: string,
     dto: UpdateStoreStatusDto,
