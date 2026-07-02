@@ -37,9 +37,10 @@ import { CreateClosureSchema, type CreateClosureDto } from './dto/create-closure
 import { AssignStaffSchema, type AssignStaffDto } from './dto/assign-staff.dto';
 import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
 
-// Límite de tamaño del logo (2 MB) y tipo mínimo del archivo que entrega multer (memory storage),
-// declarado localmente para no depender de @types/multer.
-const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+// Tope de tamaño de imagen (5 MB) como red de seguridad: el frontend ya redimensiona y recomprime
+// a WebP antes de subir, así que en la práctica llegan archivos mucho más pequeños. Y el tipo mínimo
+// del archivo que entrega multer (memory storage), declarado localmente para no depender de @types/multer.
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 interface UploadedImage {
   buffer: Buffer;
   mimetype: string;
@@ -273,13 +274,13 @@ export class StoresController {
 
   @Post(':id/logo')
   @RequirePermission('store:write')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_LOGO_BYTES } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_IMAGE_BYTES } }))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({
     summary: 'Subir/actualizar el logo de una tienda',
     description:
       'Recibe la imagen (campo `file`, multipart) y la sube a Azure Blob Storage como ' +
-      '`<storeId>.png`, guardando la URL pública en `imageUrl`. Máx. 2 MB; PNG, JPEG o WebP. ' +
+      '`<storeId>.png`, guardando la URL pública en `imageUrl`. Máx. 5 MB; PNG, JPEG o WebP. ' +
       'Solo el dueño de la tienda o un ADMIN. Publica el evento `StoreUpdated`.',
   })
   @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
@@ -309,6 +310,50 @@ export class StoresController {
       user.roles.includes('ADMIN'),
       user.correlationId,
     );
+  }
+
+  @Post(':id/banner')
+  @RequirePermission('store:write')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_IMAGE_BYTES } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Subir/actualizar el banner de una tienda',
+    description:
+      'Recibe la imagen (campo `file`, multipart) y la sube a Azure Blob Storage como ' +
+      '`store-banners/<storeId>.png`. Máx. 5 MB; PNG, JPEG o WebP. El frontend lo lee por ' +
+      'convención (no hay columna en BD). Solo el dueño de la tienda o un ADMIN.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary', description: 'Imagen del banner' } },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Banner actualizado',
+    schema: {
+      type: 'object',
+      properties: {
+        storeId:   { type: 'string', format: 'uuid' },
+        bannerUrl: { type: 'string', format: 'uri' },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Archivo faltante o tipo/tamaño inválido' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Solo el dueño o ADMIN' })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
+  @ApiResponse({ status: 503, description: 'Almacenamiento de imágenes no configurado' })
+  uploadBanner(
+    @Param('id') id: string,
+    @UploadedFile() file: UploadedImage | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    if (!file) throw new BadRequestException('Debes adjuntar una imagen en el campo "file"');
+    return this.storesService.uploadBanner(id, file, user.userId, user.roles.includes('ADMIN'));
   }
 
   @Patch(':id/status')
