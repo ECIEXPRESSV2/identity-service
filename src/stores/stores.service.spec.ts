@@ -16,8 +16,12 @@ const mockPrisma = {
   $transaction:  jest.fn(),
 };
 
+const mockStoreAssets = {
+  uploadStoreLogo: jest.fn(),
+};
+
 function makeService() {
-  return new StoresService(mockPrisma as never);
+  return new StoresService(mockPrisma as never, mockStoreAssets as never);
 }
 
 const OWNER_ID = 'owner-uuid';
@@ -106,6 +110,46 @@ describe('StoresService', () => {
     await expect(
       service.updateStore(STORE_ID, { name: 'hack' }, 'attacker', false, CORR_ID),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  // ── uploadLogo ─────────────────────────────────────────────────────────────
+
+  it('uploads logo to blob and stores the returned URL in imageUrl', async () => {
+    const service = makeService();
+    const url = 'https://acct.blob.core.windows.net/store-logos/store-uuid.png';
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockStoreAssets.uploadStoreLogo.mockResolvedValue(url);
+    mockPrisma.store.update.mockResolvedValue({ ...fakeStore, imageUrl: url });
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const buffer = Buffer.from('img');
+    const result = await service.uploadLogo(
+      STORE_ID, { buffer, mimetype: 'image/png' }, OWNER_ID, false, CORR_ID,
+    );
+
+    expect(mockStoreAssets.uploadStoreLogo).toHaveBeenCalledWith(STORE_ID, buffer, 'image/png');
+    expect(mockPrisma.store.update).toHaveBeenCalledWith({ where: { id: STORE_ID }, data: { imageUrl: url } });
+    expect(result.imageUrl).toBe(url);
+  });
+
+  it('throws BadRequestException for a non-image mime type', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+
+    await expect(
+      service.uploadLogo(STORE_ID, { buffer: Buffer.from('x'), mimetype: 'application/pdf' }, OWNER_ID, false, CORR_ID),
+    ).rejects.toThrow(BadRequestException);
+    expect(mockStoreAssets.uploadStoreLogo).not.toHaveBeenCalled();
+  });
+
+  it('throws ForbiddenException when non-owner non-admin uploads a logo', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+
+    await expect(
+      service.uploadLogo(STORE_ID, { buffer: Buffer.from('x'), mimetype: 'image/png' }, 'attacker', false, CORR_ID),
+    ).rejects.toThrow(ForbiddenException);
+    expect(mockStoreAssets.uploadStoreLogo).not.toHaveBeenCalled();
   });
 
   // ── updateStatus ───────────────────────────────────────────────────────────

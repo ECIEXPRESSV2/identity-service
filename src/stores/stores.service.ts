@@ -9,6 +9,7 @@ import {
 import { AuditAction, ClosureStatus, StoreStatus, StoreType } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { StoreAssetsService } from './store-assets.service';
 import type { CreateStoreDto } from './dto/create-store.dto';
 import type { UpdateStoreDto } from './dto/update-store.dto';
 import type { UpdateStoreStatusDto } from './dto/update-store-status.dto';
@@ -17,9 +18,14 @@ import type { UpdateScheduleDto } from './dto/update-schedule.dto';
 import type { CreateClosureDto } from './dto/create-closure.dto';
 import type { AssignStaffDto } from './dto/assign-staff.dto';
 
+const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
 @Injectable()
 export class StoresService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storeAssets: StoreAssetsService,
+  ) {}
 
   async createStore(ownerId: string, dto: CreateStoreDto, correlationId: string) {
     const store = await this.prisma.$transaction(async (tx) => {
@@ -127,6 +133,59 @@ export class StoresService {
           action:     AuditAction.STORE_UPDATED,
           oldValue:   this.pickChangedOld(store, dto) as never,
           newValue:   dto as never,
+        },
+      });
+
+      return u;
+    });
+
+    return this.formatStore(updated);
+  }
+
+  async uploadLogo(
+    id: string,
+    file: { buffer: Buffer; mimetype: string },
+    actorId: string,
+    isAdmin: boolean,
+    correlationId: string,
+  ) {
+    const store = await this.loadStore(id);
+    this.assertOwnership(store.ownerId, actorId, isAdmin);
+
+    if (!ALLOWED_IMAGE_TYPES.includes(file.mimetype)) {
+      throw new BadRequestException('La imagen debe ser PNG, JPEG o WebP');
+    }
+
+    // Sube al Blob (nombre <storeId>.png) y guarda la URL pública resultante en imageUrl.
+    const imageUrl = await this.storeAssets.uploadStoreLogo(id, file.buffer, file.mimetype);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.store.update({ where: { id }, data: { imageUrl } });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    id,
+          aggregateType:  'Store',
+          eventType:      'StoreUpdated',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType: 'StoreUpdated', eventVersion: 1, correlationId,
+            occurredAt: new Date().toISOString(),
+            storeId: id, changedFields: ['imageUrl'], performedBy: actorId,
+          },
+          status: 'PENDING', retryCount: 0,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetId:   id,
+          targetType: 'Store',
+          action:     AuditAction.STORE_UPDATED,
+          oldValue:   { imageUrl: store.imageUrl } as never,
+          newValue:   { imageUrl } as never,
         },
       });
 
