@@ -1,7 +1,22 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -21,6 +36,16 @@ import { UpdateScheduleSchema, type UpdateScheduleDto } from './dto/update-sched
 import { CreateClosureSchema, type CreateClosureDto } from './dto/create-closure.dto';
 import { AssignStaffSchema, type AssignStaffDto } from './dto/assign-staff.dto';
 import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
+
+// Límite de tamaño del logo (2 MB) y tipo mínimo del archivo que entrega multer (memory storage),
+// declarado localmente para no depender de @types/multer.
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+interface UploadedImage {
+  buffer: Buffer;
+  mimetype: string;
+  size: number;
+  originalname: string;
+}
 
 const STORE_SCHEMA = {
   type: 'object',
@@ -240,6 +265,46 @@ export class StoresController {
     return this.storesService.updateStore(
       id,
       dto,
+      user.userId,
+      user.roles.includes('ADMIN'),
+      user.correlationId,
+    );
+  }
+
+  @Post(':id/logo')
+  @RequirePermission('store:write')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_LOGO_BYTES } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Subir/actualizar el logo de una tienda',
+    description:
+      'Recibe la imagen (campo `file`, multipart) y la sube a Azure Blob Storage como ' +
+      '`<storeId>.png`, guardando la URL pública en `imageUrl`. Máx. 2 MB; PNG, JPEG o WebP. ' +
+      'Solo el dueño de la tienda o un ADMIN. Publica el evento `StoreUpdated`.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary', description: 'Imagen del logo' } },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Logo actualizado', schema: STORE_SCHEMA })
+  @ApiResponse({ status: 400, description: 'Archivo faltante o tipo/tamaño inválido' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Solo el dueño o ADMIN' })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
+  @ApiResponse({ status: 503, description: 'Almacenamiento de imágenes no configurado' })
+  uploadLogo(
+    @Param('id') id: string,
+    @UploadedFile() file: UploadedImage | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    if (!file) throw new BadRequestException('Debes adjuntar una imagen en el campo "file"');
+    return this.storesService.uploadLogo(
+      id,
+      file,
       user.userId,
       user.roles.includes('ADMIN'),
       user.correlationId,

@@ -13,6 +13,11 @@
 #   1. Aplicar la infra (carpeta infra/) y tener el ACR + Container App creados.
 #   2. Cargar los GitHub Secrets del repo (ver README de infra §Bootstrap):
 #        AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, ACR_NAME
+#   2b. Variable de entorno de RUNTIME en el Container App (no es secret de build):
+#        AZURE_STORAGE_CONNECTION_STRING = connection string de la cuenta de Blob Storage.
+#        La usa el backend para subir los logos de tienda (POST /stores/:id/logo). Contiene el
+#        AccountKey → configúrala como secret del Container App (infra/az), NUNCA en el frontend.
+#        En Render se configura en el dashboard (Environment) del servicio identity.
 #   3. En el job `deploy`, cambiar `if: false` por la condición real
 #      (p.ej. if: github.ref == 'refs/heads/main') y, si se quiere CI automático,
 #      descomentar el trigger `push`.
