@@ -248,6 +248,7 @@ export class UsersController {
       properties: {
         userIds: { type: 'array', items: { type: 'string', format: 'uuid' }, minItems: 1 },
         status:  { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'SUSPENDED'] },
+        reason:  { type: 'string', minLength: 1, maxLength: 500 },
       },
     },
   })
@@ -258,6 +259,7 @@ export class UsersController {
   async bulkUpdateStatus(
     @Body('userIds') userIds: string[],
     @Body('status')  status: string,
+    @Body('reason')  reason: string | undefined,
     @CurrentUser()   actor: AuthenticatedUser,
   ) {
     if (!Array.isArray(userIds) || userIds.length === 0) {
@@ -272,6 +274,7 @@ export class UsersController {
       status as UserStatus,
       actor.userId,
       actor.correlationId,
+      reason,
     );
   }
 
@@ -294,6 +297,12 @@ export class UsersController {
           enum: ['ACTIVE', 'INACTIVE', 'SUSPENDED'],
           description: 'ACTIVE = reactivar | INACTIVE = baja | SUSPENDED = suspender temporalmente',
         },
+        reason: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 500,
+          description: 'Justificacion administrativa del cambio de estado',
+        },
       },
     },
   })
@@ -312,6 +321,7 @@ export class UsersController {
       dto.status as UserStatus,
       actor.userId,
       actor.correlationId,
+      dto.reason,
     );
   }
 }

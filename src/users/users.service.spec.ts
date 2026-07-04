@@ -189,7 +189,7 @@ describe('UsersService', () => {
       prisma.auditLog.create.mockResolvedValue({});
       prisma.outboxEvent.create.mockResolvedValue({});
 
-      await service.updateStatus('user-123', UserStatus.INACTIVE, 'admin-id', correlationId);
+      await service.updateStatus('user-123', UserStatus.INACTIVE, 'admin-id', correlationId, 'Solicitud administrativa');
 
       expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
         expect.objectContaining({
