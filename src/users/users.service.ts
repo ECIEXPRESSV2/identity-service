@@ -236,6 +236,7 @@ export class UsersService {
     status: UserStatus,
     actorId: string,
     correlationId: string,
+    reason?: string,
   ) {
     if (actorId === targetId && status !== UserStatus.ACTIVE) {
       throw new ForbiddenException('Un administrador no puede desactivarse a sí mismo');
@@ -243,6 +244,14 @@ export class UsersService {
 
     const user = await this.prisma.user.findUnique({ where: { id: targetId } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    if (status === UserStatus.ACTIVE && user.status === UserStatus.INACTIVE) {
+      throw new BadRequestException('Una cuenta eliminada no puede reactivarse');
+    }
+
+    if (status !== UserStatus.ACTIVE && !reason?.trim()) {
+      throw new BadRequestException('La justificacion es obligatoria para eliminar o suspender una cuenta');
+    }
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.user.update({
@@ -261,7 +270,7 @@ export class UsersService {
           targetType: 'User',
           action: auditAction,
           oldValue: { status: user.status },
-          newValue: { status },
+          newValue: reason?.trim() ? { status, reason: reason.trim() } : { status },
         },
       });
 
@@ -278,7 +287,8 @@ export class UsersService {
               eventVersion: 1,
               correlationId,
               occurredAt:   new Date().toISOString(),
-              userId: targetId, reason: status,
+              userId: targetId,
+              reason: reason?.trim() || status,
             },
             status:     'PENDING',
             retryCount: 0,
@@ -298,12 +308,27 @@ export class UsersService {
     status: UserStatus,
     actorId: string,
     correlationId: string,
+    reason?: string,
   ) {
     if (status !== UserStatus.ACTIVE && userIds.includes(actorId)) {
       throw new ForbiddenException('Un administrador no puede cambiar su propio estado');
     }
+
+    if (status !== UserStatus.ACTIVE && !reason?.trim()) {
+      throw new BadRequestException('La justificacion es obligatoria para eliminar o suspender cuentas');
+    }
+
+    if (status === UserStatus.ACTIVE) {
+      const deletedCount = await this.prisma.user.count({
+        where: { id: { in: userIds }, status: UserStatus.INACTIVE },
+      });
+      if (deletedCount > 0) {
+        throw new BadRequestException('Una cuenta eliminada no puede reactivarse');
+      }
+    }
+
     const results = await Promise.all(
-      userIds.map((id) => this.updateStatus(id, status, actorId, correlationId)),
+      userIds.map((id) => this.updateStatus(id, status, actorId, correlationId, reason)),
     );
     return { updated: results.length, users: results };
   }
