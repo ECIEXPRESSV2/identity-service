@@ -43,6 +43,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Genera el Prisma Client (tipos + modelos). Sin esto, @prisma/client es un stub
+      # sin AuditAction/PrismaClient ni prisma.user, y `nest build` falla (igual que el
+      # Dockerfile, que corre `pnpm prisma generate` antes de compilar).
+      - name: Prisma generate
+        run: pnpm prisma generate
+
       - name: Build
         run: pnpm run build
 
@@ -66,6 +72,10 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # El Prisma Client también hace falta para compilar/tipar los tests.
+      - name: Prisma generate
+        run: pnpm prisma generate
 
       - name: Run tests
         run: pnpm run test
