@@ -1,32 +1,15 @@
 # ═════════════════════════════════════════════════════════════════════════════
-# Despliegue a Azure Container Apps — eciexpress-prod-identity
+# Pipeline CI/CD — eciexpress-prod-identity (identity-service)
+# Flujo: build -> test -> deploy. En push a main se compila, se corren los tests y,
+# si pasan, se construye la imagen, se sube al ACR y se actualiza el Container App.
 #
-# ⚠️  INERTE A PROPÓSITO. No existe aún la infra (ACR/Container App) y se quieren
-#     ahorrar créditos. Por eso:
-#       - Disparador SOLO manual (workflow_dispatch), que nadie va a lanzar.
-#       - El job de deploy está protegido con `if: false`.
-#     El YAML está completo y correcto: encenderlo es cambiar una línea.
-#
-# NO reemplaza al pipeline de Render (deploy.yml), que se deja intacto.
-#
-# CÓMO ENCENDERLO cuando la infra exista:
-#   1. Aplicar la infra (carpeta infra/) y tener el ACR + Container App creados.
-#   2. Cargar los GitHub Secrets del repo (ver README de infra §Bootstrap):
-#        AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, ACR_NAME
-#   2b. Variable de entorno de RUNTIME en el Container App (no es secret de build):
-#        AZURE_STORAGE_CONNECTION_STRING = connection string de la cuenta de Blob Storage.
-#        La usa el backend para subir los logos de tienda (POST /stores/:id/logo). Contiene el
-#        AccountKey → configúrala como secret del Container App (infra/az), NUNCA en el frontend.
-#        En Render se configura en el dashboard (Environment) del servicio identity.
-#   3. En el job `deploy`, cambiar `if: false` por la condición real
-#      (p.ej. if: github.ref == 'refs/heads/main') y, si se quiere CI automático,
-#      descomentar el trigger `push`.
+# Requisitos (GitHub Secrets): AZURE_CLIENT_ID, AZURE_TENANT_ID,
+# AZURE_SUBSCRIPTION_ID, ACR_NAME.
 # ═════════════════════════════════════════════════════════════════════════════
 name: azure-deploy
 
 on:
-  workflow_dispatch: {} # solo manual; inerte por ahora
-  # TODO(activar): descomentar para build+deploy automático al hacer push.
+  workflow_dispatch: {}
   push:
     branches: [main]
 
@@ -40,10 +23,57 @@ env:
   RESOURCE_GROUP: eciexpress-prod-rg
 
 jobs:
-  deploy:
-    name: build (ACR) -> update Container App
+  build:
+    name: build
     runs-on: ubuntu-latest
-    # ── INERTE: no corre hasta quitar esta línea. ──
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+  test:
+    name: test
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: pnpm run test
+
+  deploy:
+    name: deploy
+    needs: test
+    runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     environment: production
     steps:
@@ -65,18 +95,16 @@ jobs:
             .
           docker push "${{ secrets.ACR_NAME }}.azurecr.io/${IMAGE_NAME}:production"
 
-      # TODO(migraciones): este servicio necesita correr migraciones antes/junto al
-      # deploy (INVENTARIO §8). identity = `prisma migrate deploy`; el resto =
-      # `migration:run` (TypeORM). Decidir mecanismo (job/exec). reporting NO tiene DB.
-      # - name: Run DB migrations
-      #   run: echo "TODO: ejecutar migraciones"
-
       - name: Update Container App image
+        # --revision-suffix fuerza una revisión nueva aunque el tag de imagen
+        # (":production") no cambie de nombre: sin esto, ACA compara el spec,
+        # ve el mismo string de imagen y no crea revisión ni vuelve a hacer pull.
         run: |
           az containerapp update \
             --name "${CONTAINER_APP}" \
             --resource-group "${RESOURCE_GROUP}" \
-            --image "${{ secrets.ACR_NAME }}.azurecr.io/${IMAGE_NAME}:production"
+            --image "${{ secrets.ACR_NAME }}.azurecr.io/${IMAGE_NAME}:production" \
+            --revision-suffix "${GITHUB_SHA::7}-${GITHUB_RUN_NUMBER}"
 
       - name: Cleanup old untagged images
         # ACR Tasks (az acr run / acr purge) está bloqueado en esta suscripción
