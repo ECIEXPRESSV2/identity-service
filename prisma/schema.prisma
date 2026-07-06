@@ -152,6 +152,7 @@ model Store {
   description String?
   location    String
   imageUrl    String?
+  bannerUrl   String?
   status      StoreStatus @default(OPEN)
   isActive    Boolean     @default(true)
   createdAt   DateTime    @default(now())
