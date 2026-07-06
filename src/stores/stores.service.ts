@@ -27,10 +27,49 @@ export class StoresService {
     private readonly storeAssets: StoreAssetsService,
   ) {}
 
-  async createStore(ownerId: string, dto: CreateStoreDto, correlationId: string) {
+  async createStore(
+    ownerId: string,
+    dto: CreateStoreDto,
+    logo: { buffer: Buffer; mimetype: string },
+    banner: { buffer: Buffer; mimetype: string },
+    correlationId: string,
+  ) {
+    // Logo y banner son OBLIGATORIOS al crear la tienda.
+    if (!logo) throw new BadRequestException('El logo de la tienda es obligatorio');
+    if (!banner) throw new BadRequestException('El banner de la tienda es obligatorio');
+    if (!ALLOWED_IMAGE_TYPES.includes(logo.mimetype)) {
+      throw new BadRequestException('El logo debe ser PNG, JPEG o WebP');
+    }
+    if (!ALLOWED_IMAGE_TYPES.includes(banner.mimetype)) {
+      throw new BadRequestException('El banner debe ser PNG, JPEG o WebP');
+    }
+
+    // El nombre es único: lo validamos ANTES de subir imágenes para no dejar blobs huérfanos si
+    // el nombre ya existe (y para devolver un 409 claro en vez de un error de BD).
+    const clash = await this.prisma.store.findUnique({ where: { name: dto.name } });
+    if (clash) throw new ConflictException('Ya existe una tienda con ese nombre');
+
+    // Generamos el id primero para nombrar las rutas del blob (stores/<id>/logo|banner) y así poder
+    // subir ANTES de insertar: si la subida falla, no queda una tienda sin imágenes (invariante).
+    const storeId = randomUUID();
+    const imageUrl = await this.storeAssets.uploadStoreLogo(storeId, logo.buffer, logo.mimetype);
+    const bannerUrl = await this.storeAssets.uploadStoreBanner(
+      storeId,
+      banner.buffer,
+      banner.mimetype,
+    );
+
     const store = await this.prisma.$transaction(async (tx) => {
       const created = await tx.store.create({
-        data: { ownerId, ...dto, status: StoreStatus.OPEN, isActive: true },
+        data: {
+          id: storeId,
+          ownerId,
+          ...dto,
+          imageUrl,
+          bannerUrl,
+          status: StoreStatus.OPEN,
+          isActive: true,
+        },
       });
 
       await tx.outboxEvent.create({
@@ -208,9 +247,63 @@ export class StoresService {
       throw new BadRequestException('La imagen debe ser PNG, JPEG o WebP');
     }
 
-    // El banner se lee por convención (store-banners/<id>.png); no hay columna en BD que actualizar.
-    // Solo se sube al Blob y se deja rastro en auditoría (no emite evento: nada más consume el banner).
+    // Sube a stores/<id>/banner/imagen.png y persiste la URL en la columna bannerUrl (ya no se lee
+    // por convención). No emite evento: nada aguas abajo consume el banner.
     const bannerUrl = await this.storeAssets.uploadStoreBanner(id, file.buffer, file.mimetype);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.store.update({ where: { id }, data: { bannerUrl } });
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetId:   id,
+          targetType: 'Store',
+          action:     AuditAction.STORE_UPDATED,
+          oldValue:   { bannerUrl: store.bannerUrl } as never,
+          newValue:   { bannerUrl } as never,
+        },
+      });
+    });
+
+    return { storeId: id, bannerUrl };
+  }
+
+  // ─── Galería de imágenes de la tienda ────────────────────────────────────────
+
+  /** Lista las imágenes de la galería de una tienda (público). */
+  async listImages(id: string) {
+    await this.loadStore(id);
+    const images = await this.storeAssets.listStoreImages(id);
+    return { storeId: id, images };
+  }
+
+  /**
+   * Sube una o varias imágenes a la galería (`stores/<id>/images/<timestamp>.<ext>`). Cada archivo
+   * recibe un nombre único por hora de subida, así que nunca se sobreescriben. Devuelve la galería
+   * completa ya actualizada.
+   */
+  async addImages(
+    id: string,
+    files: { buffer: Buffer; mimetype: string }[],
+    actorId: string,
+    isAdmin: boolean,
+  ) {
+    const store = await this.loadStore(id);
+    // La galería la puede gestionar el dueño, un ADMIN o el staff ACTIVO de la tienda (a diferencia
+    // del logo/banner, que quedan reservados a dueño/ADMIN).
+    await this.assertCanManageGallery(store.id, store.ownerId, actorId, isAdmin);
+
+    if (!files.length) throw new BadRequestException('Debes adjuntar al menos una imagen');
+    for (const f of files) {
+      if (!ALLOWED_IMAGE_TYPES.includes(f.mimetype)) {
+        throw new BadRequestException('Cada imagen debe ser PNG, JPEG o WebP');
+      }
+    }
+
+    const uploaded = await Promise.all(
+      files.map((f) => this.storeAssets.uploadStoreImage(id, f.buffer, f.mimetype)),
+    );
 
     await this.prisma.auditLog.create({
       data: {
@@ -218,11 +311,33 @@ export class StoresService {
         targetId:   id,
         targetType: 'Store',
         action:     AuditAction.STORE_UPDATED,
-        newValue:   { bannerUrl } as never,
+        newValue:   { addedImages: uploaded } as never,
       },
     });
 
-    return { storeId: id, bannerUrl };
+    const images = await this.storeAssets.listStoreImages(id);
+    return { storeId: id, images };
+  }
+
+  /** Borra una imagen de la galería por su nombre (el que devuelve `listImages`). */
+  async deleteImage(id: string, name: string, actorId: string, isAdmin: boolean) {
+    const store = await this.loadStore(id);
+    await this.assertCanManageGallery(store.id, store.ownerId, actorId, isAdmin);
+
+    const deleted = await this.storeAssets.deleteStoreImage(id, name);
+    if (!deleted) throw new NotFoundException('Imagen no encontrada en la galería');
+
+    await this.prisma.auditLog.create({
+      data: {
+        actorId,
+        targetId:   id,
+        targetType: 'Store',
+        action:     AuditAction.STORE_UPDATED,
+        oldValue:   { removedImage: name } as never,
+      },
+    });
+
+    return { storeId: id, name, message: 'Imagen eliminada' };
   }
 
   async updateStatus(
@@ -735,6 +850,27 @@ export class StoresService {
     }
   }
 
+  // Permiso para gestionar la GALERÍA: dueño, ADMIN o staff ACTIVO de la tienda. Es más laxo que
+  // assertOwnership (usado por logo/banner) a propósito: el staff puede subir/borrar fotos, pero NO
+  // cambiar el logo ni el banner.
+  private async assertCanManageGallery(
+    storeId: string,
+    ownerId: string,
+    actorId: string,
+    isAdmin: boolean,
+  ): Promise<void> {
+    if (isAdmin || ownerId === actorId) return;
+
+    const staff = await this.prisma.storeStaff.findUnique({
+      where: { storeId_userId: { storeId, userId: actorId } },
+    });
+    if (staff?.isActive) return;
+
+    throw new ForbiddenException(
+      'Solo el dueño, un administrador o el staff de la tienda puede gestionar la galería',
+    );
+  }
+
   private pickChangedOld(
     store: Record<string, unknown>,
     dto: UpdateStoreDto,
@@ -754,6 +890,7 @@ export class StoresService {
     description?: string | null;
     location: string;
     imageUrl?: string | null;
+    bannerUrl?: string | null;
     status: StoreStatus;
     isActive: boolean;
     createdAt: Date;
@@ -767,6 +904,7 @@ export class StoresService {
       description: store.description ?? null,
       location:    store.location,
       imageUrl:    store.imageUrl ?? null,
+      bannerUrl:   store.bannerUrl ?? null,
       status:      store.status,
       isActive:    store.isActive,
       createdAt:   store.createdAt,

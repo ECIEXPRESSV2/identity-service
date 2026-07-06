@@ -10,6 +10,7 @@ import { StoresService } from './stores.service';
 const mockPrisma = {
   store:         { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn() },
   storeSchedule: { upsert: jest.fn(), findMany: jest.fn() },
+  storeStaff:    { findUnique: jest.fn() },
   storeClosure:  { findFirst: jest.fn(), findMany: jest.fn(), create: jest.fn() },
   outboxEvent:   { create: jest.fn() },
   auditLog:      { create: jest.fn() },
@@ -19,6 +20,9 @@ const mockPrisma = {
 const mockStoreAssets = {
   uploadStoreLogo: jest.fn(),
   uploadStoreBanner: jest.fn(),
+  uploadStoreImage: jest.fn(),
+  listStoreImages: jest.fn(),
+  deleteStoreImage: jest.fn(),
 };
 
 function makeService() {
@@ -31,10 +35,14 @@ const CORR_ID  = 'corr-uuid';
 
 const fakeStore = {
   id: STORE_ID, ownerId: OWNER_ID, name: 'Cafetería ECI',
-  location: 'Bloque A', description: null, imageUrl: null,
+  location: 'Bloque A', description: null, imageUrl: null, bannerUrl: null,
   status: StoreStatus.OPEN, isActive: true,
   createdAt: new Date(), updatedAt: new Date(),
 };
+
+// Logo/banner de prueba para createStore (ambos obligatorios).
+const LOGO = { buffer: Buffer.from('logo'), mimetype: 'image/png' };
+const BANNER = { buffer: Buffer.from('banner'), mimetype: 'image/webp' };
 
 describe('StoresService', () => {
   beforeEach(() => {
@@ -46,21 +54,64 @@ describe('StoresService', () => {
 
   // ── createStore ────────────────────────────────────────────────────────────
 
-  it('creates store, outbox event and audit log in one transaction', async () => {
+  it('uploads logo + banner, then creates store, outbox event and audit log', async () => {
     const service = makeService();
     const dto = { name: 'Cafetería ECI', type: 'CAFETERIA' as const, location: 'Bloque A' };
+    mockPrisma.store.findUnique.mockResolvedValue(null); // nombre libre
+    mockStoreAssets.uploadStoreLogo.mockResolvedValue('https://acct/stores/x/logo/imagen.png');
+    mockStoreAssets.uploadStoreBanner.mockResolvedValue('https://acct/stores/x/banner/imagen.png');
     mockPrisma.store.create.mockResolvedValue(fakeStore);
     mockPrisma.outboxEvent.create.mockResolvedValue({});
     mockPrisma.auditLog.create.mockResolvedValue({});
 
-    const result = await service.createStore(OWNER_ID, dto, CORR_ID);
+    const result = await service.createStore(OWNER_ID, dto, LOGO, BANNER, CORR_ID);
 
-    expect(mockPrisma.store.create).toHaveBeenCalled();
+    expect(mockStoreAssets.uploadStoreLogo).toHaveBeenCalled();
+    expect(mockStoreAssets.uploadStoreBanner).toHaveBeenCalled();
+    expect(mockPrisma.store.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          imageUrl: 'https://acct/stores/x/logo/imagen.png',
+          bannerUrl: 'https://acct/stores/x/banner/imagen.png',
+        }),
+      }),
+    );
     expect(mockPrisma.outboxEvent.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ eventType: 'StoreCreated' }) }),
     );
     expect(mockPrisma.auditLog.create).toHaveBeenCalled();
     expect(result.id).toBe(STORE_ID);
+  });
+
+  it('rejects create when the logo is missing (mandatory)', async () => {
+    const service = makeService();
+    const dto = { name: 'Cafetería ECI', type: 'CAFETERIA' as const, location: 'Bloque A' };
+
+    await expect(
+      service.createStore(OWNER_ID, dto, undefined as never, BANNER, CORR_ID),
+    ).rejects.toThrow(BadRequestException);
+    expect(mockStoreAssets.uploadStoreLogo).not.toHaveBeenCalled();
+  });
+
+  it('rejects create when the banner is missing (mandatory)', async () => {
+    const service = makeService();
+    const dto = { name: 'Cafetería ECI', type: 'CAFETERIA' as const, location: 'Bloque A' };
+
+    await expect(
+      service.createStore(OWNER_ID, dto, LOGO, undefined as never, CORR_ID),
+    ).rejects.toThrow(BadRequestException);
+    expect(mockStoreAssets.uploadStoreBanner).not.toHaveBeenCalled();
+  });
+
+  it('rejects create when the store name already exists (409), without uploading', async () => {
+    const service = makeService();
+    const dto = { name: 'Cafetería ECI', type: 'CAFETERIA' as const, location: 'Bloque A' };
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore); // nombre ocupado
+
+    await expect(
+      service.createStore(OWNER_ID, dto, LOGO, BANNER, CORR_ID),
+    ).rejects.toThrow(ConflictException);
+    expect(mockStoreAssets.uploadStoreLogo).not.toHaveBeenCalled();
   });
 
   // ── findById ───────────────────────────────────────────────────────────────
@@ -155,11 +206,12 @@ describe('StoresService', () => {
 
   // ── uploadBanner ───────────────────────────────────────────────────────────
 
-  it('uploads banner to blob and logs an audit entry (no DB column, no event)', async () => {
+  it('uploads banner to blob, persists bannerUrl and logs audit (no event)', async () => {
     const service = makeService();
-    const url = 'https://acct.blob.core.windows.net/store-banners/store-uuid.png';
+    const url = 'https://acct.blob.core.windows.net/stores/store-uuid/banner/imagen.png';
     mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
     mockStoreAssets.uploadStoreBanner.mockResolvedValue(url);
+    mockPrisma.store.update.mockResolvedValue({ ...fakeStore, bannerUrl: url });
     mockPrisma.auditLog.create.mockResolvedValue({});
 
     const buffer = Buffer.from('banner');
@@ -168,7 +220,7 @@ describe('StoresService', () => {
     );
 
     expect(mockStoreAssets.uploadStoreBanner).toHaveBeenCalledWith(STORE_ID, buffer, 'image/webp');
-    expect(mockPrisma.store.update).not.toHaveBeenCalled();
+    expect(mockPrisma.store.update).toHaveBeenCalledWith({ where: { id: STORE_ID }, data: { bannerUrl: url } });
     expect(mockPrisma.outboxEvent.create).not.toHaveBeenCalled();
     expect(mockPrisma.auditLog.create).toHaveBeenCalled();
     expect(result).toEqual({ storeId: STORE_ID, bannerUrl: url });
@@ -192,6 +244,110 @@ describe('StoresService', () => {
       service.uploadBanner(STORE_ID, { buffer: Buffer.from('x'), mimetype: 'image/png' }, 'attacker', false),
     ).rejects.toThrow(ForbiddenException);
     expect(mockStoreAssets.uploadStoreBanner).not.toHaveBeenCalled();
+  });
+
+  // ── galería de imágenes ─────────────────────────────────────────────────────
+
+  it('lists gallery images for a store', async () => {
+    const service = makeService();
+    const imgs = [{ url: 'https://acct/stores/s/images/a.png', name: 'a.png', uploadedAt: null }];
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockStoreAssets.listStoreImages.mockResolvedValue(imgs);
+
+    const result = await service.listImages(STORE_ID);
+
+    expect(mockStoreAssets.listStoreImages).toHaveBeenCalledWith(STORE_ID);
+    expect(result).toEqual({ storeId: STORE_ID, images: imgs });
+  });
+
+  it('uploads several gallery images and returns the refreshed gallery', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockStoreAssets.uploadStoreImage
+      .mockResolvedValueOnce('https://acct/stores/s/images/1.png')
+      .mockResolvedValueOnce('https://acct/stores/s/images/2.png');
+    mockStoreAssets.listStoreImages.mockResolvedValue([]);
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const files = [
+      { buffer: Buffer.from('a'), mimetype: 'image/png' },
+      { buffer: Buffer.from('b'), mimetype: 'image/webp' },
+    ];
+    await service.addImages(STORE_ID, files, OWNER_ID, false);
+
+    expect(mockStoreAssets.uploadStoreImage).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.auditLog.create).toHaveBeenCalled();
+    expect(mockStoreAssets.listStoreImages).toHaveBeenCalledWith(STORE_ID);
+  });
+
+  it('rejects gallery upload with a non-image mime type', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+
+    await expect(
+      service.addImages(STORE_ID, [{ buffer: Buffer.from('x'), mimetype: 'application/pdf' }], OWNER_ID, false),
+    ).rejects.toThrow(BadRequestException);
+    expect(mockStoreAssets.uploadStoreImage).not.toHaveBeenCalled();
+  });
+
+  it('throws ForbiddenException when a non-owner, non-staff adds gallery images', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockPrisma.storeStaff.findUnique.mockResolvedValue(null); // no es staff
+
+    await expect(
+      service.addImages(STORE_ID, [{ buffer: Buffer.from('x'), mimetype: 'image/png' }], 'attacker', false),
+    ).rejects.toThrow(ForbiddenException);
+    expect(mockStoreAssets.uploadStoreImage).not.toHaveBeenCalled();
+  });
+
+  it('allows ACTIVE staff (non-owner) to add gallery images', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockPrisma.storeStaff.findUnique.mockResolvedValue({ isActive: true });
+    mockStoreAssets.uploadStoreImage.mockResolvedValue('https://acct/stores/s/images/1.png');
+    mockStoreAssets.listStoreImages.mockResolvedValue([]);
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    await service.addImages(STORE_ID, [{ buffer: Buffer.from('a'), mimetype: 'image/png' }], 'staff-user', false);
+
+    expect(mockPrisma.storeStaff.findUnique).toHaveBeenCalledWith({
+      where: { storeId_userId: { storeId: STORE_ID, userId: 'staff-user' } },
+    });
+    expect(mockStoreAssets.uploadStoreImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a REMOVED (inactive) staff member from adding gallery images', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockPrisma.storeStaff.findUnique.mockResolvedValue({ isActive: false });
+
+    await expect(
+      service.addImages(STORE_ID, [{ buffer: Buffer.from('x'), mimetype: 'image/png' }], 'ex-staff', false),
+    ).rejects.toThrow(ForbiddenException);
+    expect(mockStoreAssets.uploadStoreImage).not.toHaveBeenCalled();
+  });
+
+  it('deletes a gallery image by name', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockStoreAssets.deleteStoreImage.mockResolvedValue(true);
+    mockPrisma.auditLog.create.mockResolvedValue({});
+
+    const result = await service.deleteImage(STORE_ID, 'a.png', OWNER_ID, false);
+
+    expect(mockStoreAssets.deleteStoreImage).toHaveBeenCalledWith(STORE_ID, 'a.png');
+    expect(result).toEqual({ storeId: STORE_ID, name: 'a.png', message: 'Imagen eliminada' });
+  });
+
+  it('throws NotFoundException when deleting a gallery image that does not exist', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockStoreAssets.deleteStoreImage.mockResolvedValue(false);
+
+    await expect(
+      service.deleteImage(STORE_ID, 'missing.png', OWNER_ID, false),
+    ).rejects.toThrow(NotFoundException);
   });
 
   // ── updateStatus ───────────────────────────────────────────────────────────

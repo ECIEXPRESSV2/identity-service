@@ -10,9 +10,14 @@ import {
   Put,
   Query,
   UploadedFile,
+  UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  FileFieldsInterceptor,
+  FileInterceptor,
+  FilesInterceptor,
+} from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -122,35 +127,55 @@ export class StoresController {
 
   @Post()
   @RequirePermission('store:write')
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'logo', maxCount: 1 },
+        { name: 'banner', maxCount: 1 },
+      ],
+      { limits: { fileSize: MAX_IMAGE_BYTES } },
+    ),
+  )
+  @ApiConsumes('multipart/form-data')
   @ApiOperation({
     summary: 'Crear punto de venta',
     description:
       'Crea un nuevo punto de venta asociado al usuario autenticado como dueño. ' +
-      'Requiere permiso `store:write`. ' +
+      'Petición `multipart/form-data`: el **logo** y el **banner** son obligatorios (campos `logo` ' +
+      'y `banner`), se suben a `stores/<storeId>/logo|banner/imagen.png` y sus URLs quedan en ' +
+      '`imageUrl` y `bannerUrl`. Máx. 5 MB c/u; PNG, JPEG o WebP. Requiere permiso `store:write`. ' +
       'Publica el evento `StoreCreated` al bus de mensajería.',
   })
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['name', 'type', 'location'],
+      required: ['name', 'type', 'location', 'logo', 'banner'],
       properties: {
         name:        { type: 'string', minLength: 2, maxLength: 100, example: 'Cafetería Bloque A' },
         type:        { type: 'string', enum: ['CAFETERIA', 'PAPELERIA', 'RESTAURANTE'], example: 'CAFETERIA' },
         description: { type: 'string', maxLength: 500, example: 'Cafetería principal del campus' },
         location:    { type: 'string', minLength: 2, maxLength: 200, example: 'Bloque A, piso 1' },
-        imageUrl:    { type: 'string', format: 'uri', example: 'https://storage.googleapis.com/img.jpg' },
+        logo:        { type: 'string', format: 'binary', description: 'Logo de la tienda (obligatorio)' },
+        banner:      { type: 'string', format: 'binary', description: 'Banner de la tienda (obligatorio)' },
       },
     },
   })
   @ApiResponse({ status: 201, description: 'Tienda creada', schema: STORE_SCHEMA })
-  @ApiResponse({ status: 400, description: 'Campos obligatorios faltantes o inválidos' })
+  @ApiResponse({ status: 400, description: 'Campos/imágenes obligatorios faltantes o inválidos' })
   @ApiResponse({ status: 401, description: 'Token inválido' })
   @ApiResponse({ status: 403, description: 'Permiso `store:write` requerido' })
+  @ApiResponse({ status: 409, description: 'Ya existe una tienda con ese nombre' })
+  @ApiResponse({ status: 503, description: 'Almacenamiento de imágenes no configurado' })
   create(
     @Body(new ZodValidationPipe(CreateStoreSchema)) dto: CreateStoreDto,
+    @UploadedFiles() files: { logo?: UploadedImage[]; banner?: UploadedImage[] } | undefined,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.storesService.createStore(user.userId, dto, user.correlationId);
+    const logo = files?.logo?.[0];
+    const banner = files?.banner?.[0];
+    if (!logo) throw new BadRequestException('Debes adjuntar el logo en el campo "logo"');
+    if (!banner) throw new BadRequestException('Debes adjuntar el banner en el campo "banner"');
+    return this.storesService.createStore(user.userId, dto, logo, banner, user.correlationId);
   }
 
   @Get()
@@ -320,8 +345,8 @@ export class StoresController {
     summary: 'Subir/actualizar el banner de una tienda',
     description:
       'Recibe la imagen (campo `file`, multipart) y la sube a Azure Blob Storage como ' +
-      '`store-banners/<storeId>.png`. Máx. 5 MB; PNG, JPEG o WebP. El frontend lo lee por ' +
-      'convención (no hay columna en BD). Solo el dueño de la tienda o un ADMIN.',
+      '`stores/<storeId>/banner/imagen.png`, guardando la URL pública en `bannerUrl`. ' +
+      'Máx. 5 MB; PNG, JPEG o WebP. Solo el dueño de la tienda o un ADMIN.',
   })
   @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
   @ApiBody({
@@ -354,6 +379,108 @@ export class StoresController {
   ) {
     if (!file) throw new BadRequestException('Debes adjuntar una imagen en el campo "file"');
     return this.storesService.uploadBanner(id, file, user.userId, user.roles.includes('ADMIN'));
+  }
+
+  // ── Galería de imágenes ──────────────────────────────────────────────────────
+
+  @Get(':id/images')
+  @Public()
+  @ApiOperation({
+    summary: 'Listar la galería de imágenes de una tienda',
+    description:
+      'Devuelve las imágenes de `stores/<storeId>/images/` (fotos varias de la tienda para ' +
+      'carruseles), más recientes primero. Endpoint público. El listado lo hace el backend, así ' +
+      'el contenedor no necesita permitir enumeración anónima.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Galería de la tienda',
+    schema: {
+      type: 'object',
+      properties: {
+        storeId: { type: 'string', format: 'uuid' },
+        images: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              url:        { type: 'string', format: 'uri' },
+              name:       { type: 'string', example: '2026-07-05T19-01-45-123Z-a1b2.webp' },
+              uploadedAt: { type: 'string', format: 'date-time', nullable: true },
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
+  listImages(@Param('id') id: string) {
+    return this.storesService.listImages(id);
+  }
+
+  @Post(':id/images')
+  @RequirePermission('store:write')
+  @UseInterceptors(FilesInterceptor('files', 20, { limits: { fileSize: MAX_IMAGE_BYTES } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Agregar imágenes a la galería de una tienda',
+    description:
+      'Sube una o varias imágenes (campo `files`, multipart, hasta 20 por petición) a ' +
+      '`stores/<storeId>/images/<timestamp>.<ext>`. Cada archivo recibe un nombre único por hora de ' +
+      'subida, así que nunca se sobreescriben. Máx. 5 MB c/u; PNG, JPEG o WebP. Devuelve la galería ' +
+      'completa ya actualizada. El dueño, un ADMIN o el staff activo de la tienda (a diferencia del ' +
+      'logo/banner, reservados a dueño/ADMIN).',
+  })
+  @ApiParam({ name: 'id', description: 'UUID de la tienda', format: 'uuid' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['files'],
+      properties: {
+        files: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+          description: 'Una o varias imágenes de la galería',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Imágenes agregadas; devuelve la galería actualizada' })
+  @ApiResponse({ status: 400, description: 'Sin archivos, o tipo/tamaño inválido' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Solo el dueño, ADMIN o staff de la tienda' })
+  @ApiResponse({ status: 404, description: 'Tienda no encontrada' })
+  @ApiResponse({ status: 503, description: 'Almacenamiento de imágenes no configurado' })
+  addImages(
+    @Param('id') id: string,
+    @UploadedFiles() files: UploadedImage[] | undefined,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    if (!files?.length) throw new BadRequestException('Debes adjuntar al menos una imagen en "files"');
+    return this.storesService.addImages(id, files, user.userId, user.roles.includes('ADMIN'));
+  }
+
+  @Delete(':id/images/:name')
+  @RequirePermission('store:write')
+  @ApiOperation({
+    summary: 'Eliminar una imagen de la galería',
+    description:
+      'Borra una imagen de la galería por su `name` (el que devuelve `GET /:id/images`). ' +
+      'El dueño, un ADMIN o el staff activo de la tienda.',
+  })
+  @ApiParam({ name: 'id',   description: 'UUID de la tienda', format: 'uuid' })
+  @ApiParam({ name: 'name', description: 'Nombre del archivo dentro de images/ (sin ruta)' })
+  @ApiResponse({ status: 200, description: 'Imagen eliminada' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 403, description: 'Solo el dueño, ADMIN o staff de la tienda' })
+  @ApiResponse({ status: 404, description: 'Tienda o imagen no encontrada' })
+  deleteImage(
+    @Param('id')   id:   string,
+    @Param('name') name: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.storesService.deleteImage(id, name, user.userId, user.roles.includes('ADMIN'));
   }
 
   @Patch(':id/status')
