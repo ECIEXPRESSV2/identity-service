@@ -81,6 +81,32 @@ export class InternalController {
     return this.internalService.resolveByFirebaseUid(firebaseUid);
   }
 
+  @Get('users/:userId/profile')
+  @Public()
+  @ApiOperation({
+    summary: '[Interno] Perfil público de un usuario',
+    description:
+      'Endpoint para uso interno entre microservicios (Order). ' +
+      'Retorna nombre y avatar de un usuario para mostrarlo en el chat comprador-vendedor, ' +
+      'sin exigir el permiso `user:read` que protege `GET /users/:id`.',
+  })
+  @ApiParam({ name: 'userId', description: 'UUID del usuario', format: 'uuid' })
+  @ApiResponse({
+    status: 200,
+    description: 'Perfil público del usuario',
+    schema: {
+      type: 'object',
+      properties: {
+        fullName:  { type: 'string' },
+        avatarUrl: { type: 'string', nullable: true },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
+  getUserProfile(@Param('userId') userId: string) {
+    return this.internalService.getUserProfile(userId);
+  }
+
   @Get('stores/:storeId/staff')
   @Public()
   @ApiOperation({

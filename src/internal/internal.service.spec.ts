@@ -137,3 +137,35 @@ describe('InternalService.resolveByFirebaseUid', () => {
     expect(result.storeId).toBe('store-owned');
   });
 });
+
+describe('InternalService.getUserProfile', () => {
+  let service: InternalService;
+  let prisma: ReturnType<typeof buildPrismaMock>;
+
+  beforeEach(async () => {
+    prisma = buildPrismaMock();
+    const module = await Test.createTestingModule({
+      providers: [InternalService, { provide: PrismaService, useValue: prisma }],
+    }).compile();
+    service = module.get(InternalService);
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('devuelve nombre y avatar del usuario, para mostrarlos en el chat del vendedor', async () => {
+    prisma.user.findUnique.mockResolvedValue({ fullName: 'Ana Cliente', avatarUrl: 'https://x/ana.png' });
+
+    const result = await service.getUserProfile('user-uuid-1');
+
+    expect(result).toEqual({ fullName: 'Ana Cliente', avatarUrl: 'https://x/ana.png' });
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { id: 'user-uuid-1' },
+      select: { fullName: true, avatarUrl: true },
+    });
+  });
+
+  it('lanza 404 si el usuario no existe', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    await expect(service.getUserProfile('no-existe')).rejects.toBeInstanceOf(NotFoundException);
+  });
+});

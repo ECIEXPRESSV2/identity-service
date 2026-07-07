@@ -127,8 +127,32 @@ export class InternalService {
     return { available: true, reason: null };
   }
 
+  /**
+   * Perfil público mínimo de un usuario (nombre + avatar) para que otros servicios
+   * (Order, en el chat comprador-vendedor) muestren "con quién se está hablando" sin
+   * necesitar el permiso `user:read` que protege `GET /users/:id`.
+   */
+  async getUserProfile(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where:  { id: userId },
+      select: { fullName: true, avatarUrl: true },
+    });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+    return { fullName: user.fullName, avatarUrl: user.avatarUrl };
+  }
+
+  /**
+   * Miembros de la tienda que pueden operarla (y ver sus chats): el staff activo MÁS el
+   * dueño. El dueño se incluye SIEMPRE aunque no tenga fila en `store_staff` —de lo
+   * contrario un dueño no podría ver los chats de su propia tienda (Order valida el acceso
+   * consultando esta lista). El staff va primero (para que Order elija un vendedor de
+   * atención por defecto antes que al dueño); el dueño se añade al final si no está ya.
+   */
   async getStoreStaff(storeId: string) {
-    const store = await this.prisma.store.findUnique({ where: { id: storeId } });
+    const store = await this.prisma.store.findUnique({
+      where:   { id: storeId },
+      include: { owner: { select: { id: true, email: true, fullName: true } } },
+    });
     if (!store) throw new NotFoundException('Tienda no encontrada');
 
     const staff = await this.prisma.storeStaff.findMany({
@@ -136,12 +160,23 @@ export class InternalService {
       include: { user: { select: { id: true, email: true, fullName: true } } },
     });
 
-    return staff.map((s) => ({
+    const members = staff.map((s) => ({
       userId:   s.userId,
       fullName: s.user.fullName,
       email:    s.user.email,
       role:     'VENDOR',
     }));
+
+    if (store.owner && !members.some((m) => m.userId === store.owner!.id)) {
+      members.push({
+        userId:   store.owner.id,
+        fullName: store.owner.fullName,
+        email:    store.owner.email,
+        role:     'OWNER',
+      });
+    }
+
+    return members;
   }
 
   private resolveEffectiveRole(roles: string[]): string | null {
