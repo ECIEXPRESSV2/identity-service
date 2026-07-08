@@ -7,7 +7,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN pnpm prisma generate && pnpm run build
+RUN rm -rf dist && pnpm prisma generate && pnpm run build
 
 EXPOSE 3000
 

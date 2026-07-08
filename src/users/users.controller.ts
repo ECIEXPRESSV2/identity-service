@@ -1,14 +1,17 @@
-import { Body, Controller, Get, HttpStatus, Param, Patch, Post, Put, Query, Res, BadRequestException } from '@nestjs/common';
+import { Body, Controller, Get, HttpStatus, Param, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors, BadRequestException } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { UsersService } from './users.service';
+import { ProfileAssetsService } from './profile-assets.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
@@ -20,6 +23,8 @@ import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
 import { UserStatus } from '@prisma/client';
 import { SessionService } from '../common/services/session.service';
 import { SkipSessionValidation } from '../common/decorators/skip-session.decorator';
+
+const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
 
 const USER_SCHEMA = {
   type: 'object',
@@ -56,6 +61,7 @@ export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly sessionService: SessionService,
+    private readonly profileAssets: ProfileAssetsService,
   ) {}
 
   @Post('auth/sync-profile')
@@ -133,7 +139,7 @@ export class UsersController {
   })
   @ApiResponse({ status: 401, description: 'Token inválido' })
   @ApiResponse({ status: 403, description: 'Permiso `user:read` requerido' })
-  listUsers(
+  async listUsers(
     @Query('page')   page   = '1',
     @Query('limit')  limit  = '20',
     @Query('search') search?: string,
@@ -141,11 +147,15 @@ export class UsersController {
     @Query('role')   role?:   string,
     @Query('sortBy') sortBy?: string,
   ) {
-    return this.usersService.listUsers(
+    const result = await this.usersService.listUsers(
       { search, status: status as UserStatus | undefined, role, sortBy: sortBy as 'createdAt' | 'lastLoginAt' | undefined },
       Math.max(1, Number.parseInt(page, 10) || 1),
       Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 20)),
     );
+    return {
+      ...result,
+      data: result.data.map((u) => ({ ...u, avatarUrl: this.profileAssets.signUrl(u.avatarUrl) })),
+    };
   }
 
   @Get('users/me')
@@ -155,8 +165,9 @@ export class UsersController {
   })
   @ApiResponse({ status: 200, description: 'Perfil del usuario autenticado', schema: USER_SCHEMA })
   @ApiResponse({ status: 401, description: 'Token inválido o usuario sin perfil — ejecutar sync-profile' })
-  getMe(@CurrentUser() user: AuthenticatedUser) {
-    return this.usersService.findByFirebaseUid(user.firebaseUid);
+  async getMe(@CurrentUser() user: AuthenticatedUser) {
+    const u = await this.usersService.findByFirebaseUid(user.firebaseUid);
+    return { ...u, avatarUrl: this.profileAssets.signUrl(u.avatarUrl) };
   }
 
   @Put('users/me')
@@ -181,11 +192,15 @@ export class UsersController {
   @ApiResponse({ status: 400, description: 'Validación fallida — ningún campo válido enviado' })
   @ApiResponse({ status: 401, description: 'Token inválido' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
-  updateMe(
+  async updateMe(
     @CurrentUser() user: AuthenticatedUser,
     @Body(new ZodValidationPipe(UpdateProfileSchema)) dto: UpdateProfileDto,
   ) {
-    return this.usersService.updateProfile(user.userId, dto, user.correlationId);
+    if (dto.avatarUrl) {
+      dto.avatarUrl = dto.avatarUrl.split('?')[0];
+    }
+    const u = await this.usersService.updateProfile(user.userId, dto, user.correlationId);
+    return { ...u, avatarUrl: this.profileAssets.signUrl(u.avatarUrl) };
   }
 
   @Patch('users/me/phone')
@@ -220,6 +235,41 @@ export class UsersController {
     return this.usersService.updatePhone(user.userId, dto.phone, user.correlationId);
   }
 
+  @Post('users/me/avatar')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: AVATAR_MAX_BYTES } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Subir/actualizar foto de perfil',
+    description:
+      'Recibe la imagen (campo `file`, multipart), la sube a Azure Blob Storage como ' +
+      '`profiles/<userId>/avatar.<ext>` y persiste la URL pública en `avatarUrl`. ' +
+      'Máx. 5 MB; PNG, JPEG o WebP.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary', description: 'Foto de perfil' } },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Foto de perfil actualizada', schema: USER_SCHEMA })
+  @ApiResponse({ status: 400, description: 'Archivo faltante o tipo/tamaño inválido' })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 503, description: 'Almacenamiento de imágenes no configurado' })
+  async uploadAvatar(
+    @CurrentUser() user: AuthenticatedUser,
+    @UploadedFile() file: { buffer: Buffer; mimetype: string } | undefined,
+  ) {
+    if (!file) throw new BadRequestException('Debes adjuntar una imagen en el campo "file"');
+    const blobUrl = await this.profileAssets.uploadProfilePhoto(
+      user.userId,
+      file.buffer,
+      file.mimetype,
+    );
+    const u = await this.usersService.updateProfile(user.userId, { avatarUrl: blobUrl }, user.correlationId);
+    return { ...u, avatarUrl: this.profileAssets.signUrl(blobUrl) };
+  }
+
   @Get('users/:id')
   @RequirePermission('user:read')
   @ApiOperation({
@@ -231,8 +281,9 @@ export class UsersController {
   @ApiResponse({ status: 401, description: 'Token inválido' })
   @ApiResponse({ status: 403, description: 'Permiso `user:read` requerido' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
-  getUser(@Param('id') id: string) {
-    return this.usersService.findById(id);
+  async getUser(@Param('id') id: string) {
+    const u = await this.usersService.findById(id);
+    return { ...u, avatarUrl: this.profileAssets.signUrl(u.avatarUrl) };
   }
 
   @Patch('users/bulk/status')
@@ -269,13 +320,17 @@ export class UsersController {
     if (!validStatuses.includes(status)) {
       throw new BadRequestException(`status debe ser uno de: ${validStatuses.join(', ')}`);
     }
-    return this.usersService.bulkUpdateStatus(
+    const result = await this.usersService.bulkUpdateStatus(
       userIds,
       status as UserStatus,
       actor.userId,
       actor.correlationId,
       reason,
     );
+    return {
+      ...result,
+      users: result.users.map((u) => ({ ...u, avatarUrl: this.profileAssets.signUrl(u.avatarUrl) })),
+    };
   }
 
   @Patch('users/:id/status')
@@ -311,17 +366,18 @@ export class UsersController {
   @ApiResponse({ status: 401, description: 'Token inválido' })
   @ApiResponse({ status: 403, description: 'Permiso `user:deactivate` requerido' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
-  updateStatus(
+  async updateStatus(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(UpdateStatusSchema)) dto: UpdateStatusDto,
     @CurrentUser() actor: AuthenticatedUser,
   ) {
-    return this.usersService.updateStatus(
+    const u = await this.usersService.updateStatus(
       id,
       dto.status as UserStatus,
       actor.userId,
       actor.correlationId,
       dto.reason,
     );
+    return { ...u, avatarUrl: this.profileAssets.signUrl(u.avatarUrl) };
   }
 }
