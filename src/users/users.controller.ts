@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpStatus, Param, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors, BadRequestException } from '@nestjs/common';
+﻿import { Body, Controller, Delete, Get, HttpStatus, Param, Patch, Post, Put, Query, Res, UploadedFile, UseInterceptors, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import {
@@ -23,6 +23,7 @@ import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
 import { UserStatus } from '@prisma/client';
 import { SessionService } from '../common/services/session.service';
 import { SkipSessionValidation } from '../common/decorators/skip-session.decorator';
+import { admin } from '../config/firebase.config';
 
 const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -44,7 +45,7 @@ const USER_SCHEMA = {
     id:          'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
     firebaseUid: 'firebase-uid-abc123',
     email:       'maria.garcia@eci.edu.co',
-    fullName:    'María García',
+    fullName:    'MarÃ­a GarcÃ­a',
     phone:       '+57 300 123 4567',
     avatarUrl:   null,
     status:      'ACTIVE',
@@ -81,7 +82,7 @@ export class UsersController {
       type: 'object',
       required: ['fullName'],
       properties: {
-        fullName: { type: 'string', minLength: 2, maxLength: 100, example: 'María García' },
+        fullName: { type: 'string', minLength: 2, maxLength: 100, example: 'MarÃ­a GarcÃ­a' },
         phone:    { type: 'string', example: '+57 300 123 4567' },
       },
     },
@@ -93,9 +94,9 @@ export class UsersController {
       allOf: [{ type: 'object', properties: { sessionId: { type: 'string', format: 'uuid' } } }],
     },
   })
-  @ApiResponse({ status: 200, description: 'Perfil ya existente — retornado sin cambios' })
-  @ApiResponse({ status: 400, description: 'Validación fallida — fullName es obligatorio' })
-  @ApiResponse({ status: 401, description: 'Token de Firebase ausente, expirado o inválido' })
+  @ApiResponse({ status: 200, description: 'Perfil ya existente â€” retornado sin cambios' })
+  @ApiResponse({ status: 400, description: 'ValidaciÃ³n fallida â€” fullName es obligatorio' })
+  @ApiResponse({ status: 401, description: 'Token de Firebase ausente, expirado o invÃ¡lido' })
   async syncProfile(
     @CurrentUser() user: AuthenticatedUser,
     @Body(new ZodValidationPipe(SyncProfileSchema)) dto: SyncProfileDto,
@@ -137,7 +138,7 @@ export class UsersController {
       },
     },
   })
-  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 401, description: 'Token invÃ¡lido' })
   @ApiResponse({ status: 403, description: 'Permiso `user:read` requerido' })
   async listUsers(
     @Query('page')   page   = '1',
@@ -164,7 +165,7 @@ export class UsersController {
     description: 'Retorna el perfil del usuario autenticado incluyendo sus roles activos.',
   })
   @ApiResponse({ status: 200, description: 'Perfil del usuario autenticado', schema: USER_SCHEMA })
-  @ApiResponse({ status: 401, description: 'Token inválido o usuario sin perfil — ejecutar sync-profile' })
+  @ApiResponse({ status: 401, description: 'Token invÃ¡lido o usuario sin perfil â€” ejecutar sync-profile' })
   async getMe(@CurrentUser() user: AuthenticatedUser) {
     const u = await this.usersService.findByFirebaseUid(user.firebaseUid);
     return { ...u, avatarUrl: this.profileAssets.signUrl(u.avatarUrl) };
@@ -175,22 +176,22 @@ export class UsersController {
     summary: 'Actualizar perfil propio',
     description:
       'Actualiza los campos del perfil del usuario autenticado. ' +
-      'Solo se actualizan los campos enviados (patch semántico). ' +
+      'Solo se actualizan los campos enviados (patch semÃ¡ntico). ' +
       'Publica el evento `UserProfileUpdated` con los campos modificados.',
   })
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
-        fullName:  { type: 'string', minLength: 2, maxLength: 100, example: 'María García López' },
+        fullName:  { type: 'string', minLength: 2, maxLength: 100, example: 'MarÃ­a GarcÃ­a LÃ³pez' },
         phone:     { type: 'string', example: '+57 300 123 4567' },
         avatarUrl: { type: 'string', format: 'uri', example: 'https://storage.googleapis.com/avatar.jpg' },
       },
     },
   })
   @ApiResponse({ status: 200, description: 'Perfil actualizado', schema: USER_SCHEMA })
-  @ApiResponse({ status: 400, description: 'Validación fallida — ningún campo válido enviado' })
-  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 400, description: 'ValidaciÃ³n fallida â€” ningÃºn campo vÃ¡lido enviado' })
+  @ApiResponse({ status: 401, description: 'Token invÃ¡lido' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
   async updateMe(
     @CurrentUser() user: AuthenticatedUser,
@@ -242,8 +243,8 @@ export class UsersController {
     summary: 'Subir/actualizar foto de perfil',
     description:
       'Recibe la imagen (campo `file`, multipart), la sube a Azure Blob Storage como ' +
-      '`profiles/<userId>/avatar.<ext>` y persiste la URL pública en `avatarUrl`. ' +
-      'Máx. 5 MB; PNG, JPEG o WebP.',
+      '`profiles/<userId>/avatar.<ext>` y persiste la URL pÃºblica en `avatarUrl`. ' +
+      'MÃ¡x. 5 MB; PNG, JPEG o WebP.',
   })
   @ApiBody({
     schema: {
@@ -253,9 +254,9 @@ export class UsersController {
     },
   })
   @ApiResponse({ status: 200, description: 'Foto de perfil actualizada', schema: USER_SCHEMA })
-  @ApiResponse({ status: 400, description: 'Archivo faltante o tipo/tamaño inválido' })
-  @ApiResponse({ status: 401, description: 'Token inválido' })
-  @ApiResponse({ status: 503, description: 'Almacenamiento de imágenes no configurado' })
+  @ApiResponse({ status: 400, description: 'Archivo faltante o tipo/tamaÃ±o invÃ¡lido' })
+  @ApiResponse({ status: 401, description: 'Token invÃ¡lido' })
+  @ApiResponse({ status: 503, description: 'Almacenamiento de imÃ¡genes no configurado' })
   async uploadAvatar(
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: { buffer: Buffer; mimetype: string } | undefined,
@@ -270,6 +271,24 @@ export class UsersController {
     return { ...u, avatarUrl: this.profileAssets.signUrl(blobUrl) };
   }
 
+  @Delete('users/me')
+  @ApiOperation({
+    summary: 'Eliminar cuenta propia',
+    description:
+      'Realiza una baja lógica de la cuenta autenticada: marca el usuario como INACTIVE, ' +
+      'registra auditoría, publica UserDeactivated y revoca refresh tokens en Firebase.',
+  })
+  @ApiResponse({ status: 200, description: 'Cuenta marcada como inactiva', schema: USER_SCHEMA })
+  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
+  async deleteMe(@CurrentUser() user: AuthenticatedUser) {
+    await admin.auth().revokeRefreshTokens(user.firebaseUid);
+    const u = await this.usersService.deactivateOwnAccount(
+      user.userId,
+      user.correlationId,
+    );
+    return { ...u, avatarUrl: this.profileAssets.signUrl(u.avatarUrl) };
+  }
   @Get('users/:id')
   @RequirePermission('user:read')
   @ApiOperation({
@@ -278,7 +297,7 @@ export class UsersController {
   })
   @ApiParam({ name: 'id', description: 'UUID del usuario', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Perfil del usuario', schema: USER_SCHEMA })
-  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 401, description: 'Token invÃ¡lido' })
   @ApiResponse({ status: 403, description: 'Permiso `user:read` requerido' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
   async getUser(@Param('id') id: string) {
@@ -289,8 +308,8 @@ export class UsersController {
   @Patch('users/bulk/status')
   @RequirePermission('user:deactivate')
   @ApiOperation({
-    summary: 'Cambiar estado de múltiples usuarios',
-    description: 'Actualiza el estado de varios usuarios en una sola operación. Requiere permiso `user:deactivate`.',
+    summary: 'Cambiar estado de mÃºltiples usuarios',
+    description: 'Actualiza el estado de varios usuarios en una sola operaciÃ³n. Requiere permiso `user:deactivate`.',
   })
   @ApiBody({
     schema: {
@@ -304,8 +323,8 @@ export class UsersController {
     },
   })
   @ApiResponse({ status: 200, description: 'Estados actualizados' })
-  @ApiResponse({ status: 400, description: 'userIds vacío o status inválido' })
-  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 400, description: 'userIds vacÃ­o o status invÃ¡lido' })
+  @ApiResponse({ status: 401, description: 'Token invÃ¡lido' })
   @ApiResponse({ status: 403, description: 'Permiso `user:deactivate` requerido' })
   async bulkUpdateStatus(
     @Body('userIds') userIds: string[],
@@ -314,7 +333,7 @@ export class UsersController {
     @CurrentUser()   actor: AuthenticatedUser,
   ) {
     if (!Array.isArray(userIds) || userIds.length === 0) {
-      throw new BadRequestException('userIds debe ser un array no vacío');
+      throw new BadRequestException('userIds debe ser un array no vacÃ­o');
     }
     const validStatuses = ['ACTIVE', 'INACTIVE', 'SUSPENDED'];
     if (!validStatuses.includes(status)) {
@@ -362,8 +381,8 @@ export class UsersController {
     },
   })
   @ApiResponse({ status: 200, description: 'Estado actualizado', schema: USER_SCHEMA })
-  @ApiResponse({ status: 400, description: 'Status inválido' })
-  @ApiResponse({ status: 401, description: 'Token inválido' })
+  @ApiResponse({ status: 400, description: 'Status invÃ¡lido' })
+  @ApiResponse({ status: 401, description: 'Token invÃ¡lido' })
   @ApiResponse({ status: 403, description: 'Permiso `user:deactivate` requerido' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
   async updateStatus(
@@ -381,3 +400,4 @@ export class UsersController {
     return { ...u, avatarUrl: this.profileAssets.signUrl(u.avatarUrl) };
   }
 }
+

@@ -4,7 +4,7 @@
 # si pasan, se construye la imagen, se sube al ACR y se actualiza el Container App.
 #
 # Requisitos (GitHub Secrets): AZURE_CLIENT_ID, AZURE_TENANT_ID,
-# AZURE_SUBSCRIPTION_ID, ACR_NAME.
+# AZURE_SUBSCRIPTION_ID, ACR_NAME, FIREBASE_WEB_API_KEY.
 # ═════════════════════════════════════════════════════════════════════════════
 name: azure-deploy
 
@@ -96,6 +96,20 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Sync Container App secrets
+        env:
+          FIREBASE_WEB_API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
+        run: |
+          if [ -z "$FIREBASE_WEB_API_KEY" ]; then
+            echo "Missing GitHub secret FIREBASE_WEB_API_KEY"
+            exit 1
+          fi
+
+          az containerapp secret set \
+            --name "${CONTAINER_APP}" \
+            --resource-group "${RESOURCE_GROUP}" \
+            --secrets firebase-web-api-key="$FIREBASE_WEB_API_KEY"
+
       # Build + push con Docker (az acr build / ACR Tasks está bloqueado en esta suscripción).
       - name: Build & push image to ACR
         run: |
@@ -114,6 +128,7 @@ jobs:
             --name "${CONTAINER_APP}" \
             --resource-group "${RESOURCE_GROUP}" \
             --image "${{ secrets.ACR_NAME }}.azurecr.io/${IMAGE_NAME}:production" \
+            --set-env-vars FIREBASE_WEB_API_KEY=secretref:firebase-web-api-key \
             --revision-suffix "${GITHUB_SHA::7}-${GITHUB_RUN_NUMBER}"
 
       - name: Cleanup old untagged images

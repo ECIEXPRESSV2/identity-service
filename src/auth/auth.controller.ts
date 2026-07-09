@@ -1,6 +1,7 @@
-import { Controller, Get } from '@nestjs/common';
+﻿import { Body, Controller, Get, Post } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiBody,
   ApiOperation,
   ApiResponse,
   ApiTags,
@@ -8,6 +9,11 @@ import {
 import { AuthService } from './auth.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../common/guards/firebase-auth.guard';
+import { ZodValidationPipe } from '../common/pipes/zod-validation.pipe';
+import {
+  ChangePasswordSchema,
+  type ChangePasswordDto,
+} from './dto/change-password.dto';
 
 @ApiTags('Auth')
 @ApiBearerAuth()
@@ -39,5 +45,32 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Token ausente, expirado o inválido' })
   validate(@CurrentUser() user: AuthenticatedUser) {
     return this.authService.buildValidationResponse(user);
+  }
+
+  @Post('change-password')
+  @ApiOperation({
+    summary: 'Cambiar contraseña propia',
+    description:
+      'Valida la contraseña actual contra Firebase Auth y actualiza la contraseña ' +
+      'del usuario autenticado usando Firebase Admin.',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['currentPassword', 'newPassword'],
+      properties: {
+        currentPassword: { type: 'string', minLength: 1 },
+        newPassword: { type: 'string', minLength: 8, maxLength: 128 },
+      },
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Contraseña actualizada' })
+  @ApiResponse({ status: 400, description: 'Validación fallida' })
+  @ApiResponse({ status: 401, description: 'Contraseña actual inválida o token inválido' })
+  changePassword(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body(new ZodValidationPipe(ChangePasswordSchema)) dto: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(user, dto);
   }
 }
