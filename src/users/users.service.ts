@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   ForbiddenException,
   Injectable,
@@ -67,11 +67,11 @@ export class UsersService {
     correlationId: string,
   ) {
     if (!dto.phone) {
-      // phone es obligatorio solo para usuarios nuevos; se valida aquí
+      // phone es obligatorio solo para usuarios nuevos; se valida aquÃ­
       // porque el DTO lo mantiene opcional para re-sincronizaciones de usuarios existentes
       const alreadyExists = await this.prisma.user.findUnique({ where: { firebaseUid }, select: { id: true } });
       if (!alreadyExists) {
-        throw new BadRequestException('El número de teléfono es obligatorio para el registro');
+        throw new BadRequestException('El nÃºmero de telÃ©fono es obligatorio para el registro');
       }
     }
 
@@ -93,7 +93,7 @@ export class UsersService {
     });
     if (!buyerRole) {
       throw new InternalServerErrorException(
-        'Rol BUYER no encontrado — ejecuta el seed: pnpm db:seed',
+        'Rol BUYER no encontrado â€” ejecuta el seed: pnpm db:seed',
       );
     }
 
@@ -230,6 +230,58 @@ export class UsersService {
     return this.updateProfile(userId, { phone }, correlationId);
   }
 
+  async deactivateOwnAccount(userId: string, correlationId: string) {
+    const reason = 'SELF_DELETION';
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { userRoles: { include: { role: true } } },
+    });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+    if (user.status === UserStatus.INACTIVE) return this.formatUser(user);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const u = await tx.user.update({
+        where: { id: userId },
+        data: { status: UserStatus.INACTIVE },
+        include: { userRoles: { include: { role: true } } },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId: userId,
+          targetId: userId,
+          targetType: 'User',
+          action: AuditAction.USER_DEACTIVATED,
+          oldValue: { status: user.status } as never,
+          newValue: { status: UserStatus.INACTIVE, reason } as never,
+        },
+      });
+
+      await tx.outboxEvent.create({
+        data: {
+          aggregateId:    userId,
+          aggregateType:  'User',
+          eventType:      'UserDeactivated',
+          eventVersion:   1,
+          idempotencyKey: randomUUID(),
+          payload: {
+            eventType:    'UserDeactivated',
+            eventVersion: 1,
+            correlationId,
+            occurredAt:   new Date().toISOString(),
+            userId,
+            reason,
+          },
+          status:     'PENDING',
+          retryCount: 0,
+        },
+      });
+
+      return u;
+    });
+
+    return this.formatUser(updated);
+  }
 
   async updateStatus(
     targetId: string,
@@ -239,7 +291,7 @@ export class UsersService {
     reason?: string,
   ) {
     if (actorId === targetId && status !== UserStatus.ACTIVE) {
-      throw new ForbiddenException('Un administrador no puede desactivarse a sí mismo');
+      throw new ForbiddenException('Un administrador no puede desactivarse a sÃ­ mismo');
     }
 
     const user = await this.prisma.user.findUnique({ where: { id: targetId } });
@@ -360,3 +412,4 @@ export class UsersService {
     };
   }
 }
+
