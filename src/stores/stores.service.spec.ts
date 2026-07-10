@@ -412,10 +412,50 @@ describe('StoresService', () => {
   it('throws ForbiddenException when non-owner tries to upsert schedule', async () => {
     const service = makeService();
     mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockPrisma.storeStaff.findUnique.mockResolvedValue(null); // no es staff de ninguna tienda
 
     await expect(
       service.upsertSchedule(STORE_ID, { dayOfWeek: 1, openTime: '08:00', closeTime: '18:00', isActive: true }, 'attacker', false, CORR_ID),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('allows ACTIVE staff (non-owner, non-admin) to upsert a schedule for their assigned store', async () => {
+    const service = makeService();
+    const schedule = { id: 'sch-1', storeId: STORE_ID, dayOfWeek: 1, openTime: '08:00', closeTime: '18:00', isActive: true };
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore);
+    mockPrisma.storeStaff.findUnique.mockResolvedValue({ isActive: true });
+    mockPrisma.storeSchedule.upsert.mockResolvedValue(schedule);
+
+    const result = await service.upsertSchedule(
+      STORE_ID, { dayOfWeek: 1, openTime: '08:00', closeTime: '18:00', isActive: true }, 'staff-user', false, CORR_ID,
+    );
+
+    expect(mockPrisma.storeStaff.findUnique).toHaveBeenCalledWith({
+      where: { storeId_userId: { storeId: STORE_ID, userId: 'staff-user' } },
+    });
+    expect(result.openTime).toBe('08:00');
+  });
+
+  it('scopes staff access per store — being staff of another store does not grant access here', async () => {
+    const service = makeService();
+    mockPrisma.store.findUnique.mockResolvedValue(fakeStore); // esta consulta es sobre STORE_ID
+    // El vendedor SÍ es staff activo, pero de OTRA tienda — la búsqueda por storeId_userId de
+    // STORE_ID no lo encuentra, así que el resultado es null (no existe esa fila compuesta).
+    mockPrisma.storeStaff.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.upsertSchedule(
+        STORE_ID,
+        { dayOfWeek: 1, openTime: '08:00', closeTime: '18:00', isActive: true },
+        'vendor-of-other-store',
+        false,
+        CORR_ID,
+      ),
+    ).rejects.toThrow(ForbiddenException);
+
+    expect(mockPrisma.storeStaff.findUnique).toHaveBeenCalledWith({
+      where: { storeId_userId: { storeId: STORE_ID, userId: 'vendor-of-other-store' } },
+    });
   });
 
   // ── getSchedules ───────────────────────────────────────────────────────────
