@@ -143,7 +143,7 @@ export class StoresService {
     correlationId: string,
   ) {
     const store = await this.loadStore(id);
-    this.assertOwnership(store.ownerId, actorId, isAdmin);
+    await this.assertCanOperate(store.id, store.ownerId, actorId, isAdmin);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const u = await tx.store.update({ where: { id }, data: dto });
@@ -189,7 +189,7 @@ export class StoresService {
     correlationId: string,
   ) {
     const store = await this.loadStore(id);
-    this.assertOwnership(store.ownerId, actorId, isAdmin);
+    await this.assertCanOperate(store.id, store.ownerId, actorId, isAdmin);
 
     if (!ALLOWED_IMAGE_TYPES.includes(file.mimetype)) {
       throw new BadRequestException('La imagen debe ser PNG, JPEG o WebP');
@@ -241,7 +241,7 @@ export class StoresService {
     isAdmin: boolean,
   ) {
     const store = await this.loadStore(id);
-    this.assertOwnership(store.ownerId, actorId, isAdmin);
+    await this.assertCanOperate(store.id, store.ownerId, actorId, isAdmin);
 
     if (!ALLOWED_IMAGE_TYPES.includes(file.mimetype)) {
       throw new BadRequestException('La imagen debe ser PNG, JPEG o WebP');
@@ -290,9 +290,7 @@ export class StoresService {
     isAdmin: boolean,
   ) {
     const store = await this.loadStore(id);
-    // La galería la puede gestionar el dueño, un ADMIN o el staff ACTIVO de la tienda (a diferencia
-    // del logo/banner, que quedan reservados a dueño/ADMIN).
-    await this.assertCanManageGallery(store.id, store.ownerId, actorId, isAdmin);
+    await this.assertCanOperate(store.id, store.ownerId, actorId, isAdmin);
 
     if (!files.length) throw new BadRequestException('Debes adjuntar al menos una imagen');
     for (const f of files) {
@@ -322,7 +320,7 @@ export class StoresService {
   /** Borra una imagen de la galería por su nombre (el que devuelve `listImages`). */
   async deleteImage(id: string, name: string, actorId: string, isAdmin: boolean) {
     const store = await this.loadStore(id);
-    await this.assertCanManageGallery(store.id, store.ownerId, actorId, isAdmin);
+    await this.assertCanOperate(store.id, store.ownerId, actorId, isAdmin);
 
     const deleted = await this.storeAssets.deleteStoreImage(id, name);
     if (!deleted) throw new NotFoundException('Imagen no encontrada en la galería');
@@ -348,7 +346,7 @@ export class StoresService {
     correlationId: string,
   ) {
     const store = await this.loadStore(id);
-    this.assertOwnership(store.ownerId, actorId, isAdmin);
+    await this.assertCanOperate(store.id, store.ownerId, actorId, isAdmin);
 
     if (store.status === dto.status) {
       return this.formatStore(store);
@@ -409,7 +407,7 @@ export class StoresService {
     correlationId: string,
   ) {
     const store = await this.loadStore(storeId);
-    this.assertOwnership(store.ownerId, actorId, isAdmin);
+    await this.assertCanOperate(store.id, store.ownerId, actorId, isAdmin);
 
     if (dto.openTime >= dto.closeTime) {
       throw new BadRequestException('La hora de apertura debe ser anterior a la hora de cierre');
@@ -596,7 +594,7 @@ export class StoresService {
     correlationId: string,
   ) {
     const store = await this.loadStore(storeId);
-    this.assertOwnership(store.ownerId, actorId, isAdmin);
+    await this.assertCanOperate(store.id, store.ownerId, actorId, isAdmin);
 
     const schedule = await this.prisma.storeSchedule.findFirst({
       where: { id: scheduleId, storeId },
@@ -643,7 +641,7 @@ export class StoresService {
     correlationId: string,
   ) {
     const store = await this.loadStore(storeId);
-    this.assertOwnership(store.ownerId, actorId, isAdmin);
+    await this.assertCanOperate(store.id, store.ownerId, actorId, isAdmin);
 
     const schedule = await this.prisma.storeSchedule.findFirst({
       where: { id: scheduleId, storeId },
@@ -844,16 +842,10 @@ export class StoresService {
     return store;
   }
 
-  private assertOwnership(ownerId: string, actorId: string, isAdmin: boolean): void {
-    if (!isAdmin && ownerId !== actorId) {
-      throw new ForbiddenException('Solo el dueño de la tienda o un administrador puede realizar esta acción');
-    }
-  }
-
-  // Permiso para gestionar la GALERÍA: dueño, ADMIN o staff ACTIVO de la tienda. Es más laxo que
-  // assertOwnership (usado por logo/banner) a propósito: el staff puede subir/borrar fotos, pero NO
-  // cambiar el logo ni el banner.
-  private async assertCanManageGallery(
+  // Permiso operativo: ADMIN, dueño de registro (ownerId, siempre el admin que la creó) o
+  // staff ACTIVO asignado vía store_staff. El vendedor opera la tienda a través del staff,
+  // no de ownerId — ver UC-AD-17 y RN-10 en el CLAUDE.md.
+  private async assertCanOperate(
     storeId: string,
     ownerId: string,
     actorId: string,
@@ -867,7 +859,7 @@ export class StoresService {
     if (staff?.isActive) return;
 
     throw new ForbiddenException(
-      'Solo el dueño, un administrador o el staff de la tienda puede gestionar la galería',
+      'Solo el dueño, un administrador o el staff de la tienda puede realizar esta acción',
     );
   }
 
