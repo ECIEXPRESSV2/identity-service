@@ -66,15 +66,6 @@ export class UsersService {
     dto: SyncProfileDto,
     correlationId: string,
   ) {
-    if (!dto.phone) {
-      // phone es obligatorio solo para usuarios nuevos; se valida aquÃ­
-      // porque el DTO lo mantiene opcional para re-sincronizaciones de usuarios existentes
-      const alreadyExists = await this.prisma.user.findUnique({ where: { firebaseUid }, select: { id: true } });
-      if (!alreadyExists) {
-        throw new BadRequestException('El nÃºmero de telÃ©fono es obligatorio para el registro');
-      }
-    }
-
     const existing = await this.prisma.user.findUnique({
       where: { firebaseUid },
       include: { userRoles: { include: { role: true } } },
