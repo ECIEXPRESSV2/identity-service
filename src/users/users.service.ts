@@ -73,7 +73,10 @@ export class UsersService {
     if (existing) {
       const updated = await this.prisma.user.update({
         where: { id: existing.id },
-        data: { lastLoginAt: new Date() },
+        data: {
+          lastLoginAt: new Date(),
+          ...(dto.phone ? { phone: dto.phone } : {}),
+        },
         include: { userRoles: { include: { role: true } } },
       });
       return { created: false, ...this.formatUser(updated) };
