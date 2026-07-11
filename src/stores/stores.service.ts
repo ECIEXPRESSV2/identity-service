@@ -114,10 +114,11 @@ export class StoresService {
 
   async listStores() {
     const stores = await this.prisma.store.findMany({
-      where: { isActive: true },
+      where:   { isActive: true },
+      include: { schedules: { where: { isActive: true } } },
       orderBy: { createdAt: 'desc' },
     });
-    return stores.map(this.formatStore);
+    return stores.map((s) => ({ ...this.formatStore(s), schedules: s.schedules }));
   }
 
   async findById(id: string) {
