@@ -8,6 +8,7 @@ import { StoreStatus } from '@prisma/client';
 import { StoresService } from './stores.service';
 
 const mockPrisma = {
+  user:          { findUnique: jest.fn() },
   store:         { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn() },
   storeSchedule: { upsert: jest.fn(), findMany: jest.fn() },
   storeStaff:    { findUnique: jest.fn() },
@@ -50,6 +51,7 @@ describe('StoresService', () => {
     mockPrisma.$transaction.mockImplementation(
       (fn: (tx: typeof mockPrisma) => Promise<unknown>) => fn(mockPrisma),
     );
+    mockPrisma.user.findUnique.mockResolvedValue({ fullName: 'Owner Name' });
   });
 
   // ── createStore ────────────────────────────────────────────────────────────
