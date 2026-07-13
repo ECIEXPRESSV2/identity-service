@@ -46,6 +46,11 @@ export class StoresService {
 
     // El nombre es único: lo validamos ANTES de subir imágenes para no dejar blobs huérfanos si
     // el nombre ya existe (y para devolver un 409 claro en vez de un error de BD).
+    const owner = await this.prisma.user.findUnique({
+      where: { id: ownerId },
+      select: { fullName: true },
+    });
+    if (!owner) throw new NotFoundException('Usuario propietario no encontrado');
     const clash = await this.prisma.store.findUnique({ where: { name: dto.name } });
     if (clash) throw new ConflictException('Ya existe una tienda con ese nombre');
 
@@ -86,6 +91,7 @@ export class StoresService {
             occurredAt:   new Date().toISOString(),
             storeId:  created.id,
             ownerId,
+            ownerName: owner.fullName,
             name:     created.name,
             type:     created.type,
             location: created.location,
@@ -771,7 +777,8 @@ export class StoresService {
           payload: {
             eventType: 'StoreStaffChanged', eventVersion: 1, correlationId,
             occurredAt: new Date().toISOString(),
-            storeId, userId: dto.userId, action: 'assigned', performedBy: actorId,
+            storeId, userId: dto.userId, userName: user.fullName,
+            action: 'assigned', performedBy: actorId,
           },
           status: 'PENDING', retryCount: 0,
         },
