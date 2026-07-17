@@ -93,12 +93,22 @@ export class PqrsService {
   }
 
   async close(id: string, closedBy: string) {
-    const ticket = await this.prisma.pqrs.findUnique({ where: { id } });
+    const ticket = await this.prisma.pqrs.findUnique({
+      where: { id },
+      include: {
+        user: { select: { id: true, fullName: true, email: true } },
+        messages: { orderBy: { createdAt: 'asc' } },
+      },
+    });
     if (!ticket) throw new NotFoundException('PQRS no encontrada');
     if (ticket.status === PqrsStatus.CLOSED) return ticket;
     return this.prisma.pqrs.update({
       where: { id },
       data: { status: PqrsStatus.CLOSED, closedAt: new Date(), closedBy },
+      include: {
+        user: { select: { id: true, fullName: true, email: true } },
+        messages: { orderBy: { createdAt: 'asc' } },
+      },
     });
   }
 }
