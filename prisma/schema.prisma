@@ -46,6 +46,16 @@ enum OutboxStatus {
   FAILED
 }
 
+enum PqrsStatus {
+  OPEN
+  CLOSED
+}
+
+enum PqrsSenderRole {
+  USER
+  ADMIN
+}
+
 enum AuditAction {
   USER_CREATED
   USER_UPDATED
@@ -83,6 +93,7 @@ model User {
   closures     StoreClosure[] @relation("ClosureCreator")
   staffEntries StoreStaff[]   @relation("StaffMember")
   sessions     UserSession[]
+  pqrsTickets  Pqrs[]         @relation("PqrsOwner")
 
   @@map("users")
 }
@@ -267,4 +278,33 @@ model UserSession {
   user User @relation(fields: [userId], references: [id])
 
   @@map("user_sessions")
+}
+
+model Pqrs {
+  id        String     @id @default(uuid())
+  userId    String
+  subject   String
+  status    PqrsStatus @default(OPEN)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  closedAt  DateTime?
+  closedBy  String?
+
+  user     User          @relation("PqrsOwner", fields: [userId], references: [id])
+  messages PqrsMessage[]
+
+  @@map("pqrs")
+}
+
+model PqrsMessage {
+  id         String         @id @default(uuid())
+  pqrsId     String
+  senderId   String
+  senderRole PqrsSenderRole
+  body       String
+  createdAt  DateTime       @default(now())
+
+  pqrs Pqrs @relation(fields: [pqrsId], references: [id])
+
+  @@map("pqrs_messages")
 }
