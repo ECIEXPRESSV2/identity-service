@@ -9,6 +9,7 @@ import { StoresModule } from './stores/stores.module';
 import { OutboxModule } from './outbox/outbox.module';
 import { AuditModule } from './audit/audit.module';
 import { InternalModule } from './internal/internal.module';
+import { PqrsModule } from './pqrs/pqrs.module';
 import { FirebaseAuthGuard } from './common/guards/firebase-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { CorrelationIdInterceptor } from './common/interceptors/correlation-id.interceptor';
@@ -28,6 +29,7 @@ import { AppService } from './app.service';
     OutboxModule,
     AuditModule,
     InternalModule,
+    PqrsModule,
   ],
   controllers: [AppController],
   providers: [
